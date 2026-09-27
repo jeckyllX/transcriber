@@ -863,5 +863,131 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   });
 
+  function loadDemoData() {
+    selectedFileCard.classList.remove("hidden");
+    dropzone.classList.add("hidden");
+    fileNameDisplay.textContent = "tech_talk_keynote.mp3";
+    fileSizeDisplay.textContent = "12.4 MB (00:42 duration)";
+    audioPreview.classList.remove("hidden");
+
+    const demoResult = {
+      task_id: "demo-showcase",
+      filename: "tech_talk_keynote.mp3",
+      duration: 42.8,
+      processing_time: 1.4,
+      language: "en",
+      num_speakers: 2,
+      text: "[Alex (Host)]: Welcome back to Tech Horizons. Today we're exploring local AI architectures and offline speech recognition.\n[Dr. Aris (AI Researcher)]: Thanks Alex. Running neural models directly on CPU using INT8 quantization and ONNX has unlocked incredible speed and privacy for end users.\n[Alex (Host)]: The ability to isolate audio, align speaker diarization, and generate karaoke subtitles without cloud dependency is a major leap forward.",
+      summary: "### Executive Briefing\n- **Edge AI Acceleration**: Advances in INT8 quantization and ONNX runtime enable full Whisper transcription and neural speaker diarization directly on standard CPUs without GPU requirements.\n- **Zero-Latency Privacy**: Self-hosted speech-to-text ensures complete data isolation and confidential media processing.\n\n### Key Takeaways\n1. **High Precision Diarization**: Multi-speaker attribution accurately separates overlapping turns.\n2. **Subtitle Generation**: Complete support for SRT, WebVTT voice cues, and karaoke-timed ASS format.",
+      polished: "Welcome back to Tech Horizons. Today we are exploring local AI architectures and offline speech recognition.\n\nThanks Alex. Running neural models directly on CPU using INT8 quantization and ONNX has unlocked incredible speed and privacy for end users.\n\nThe ability to isolate audio, align speaker diarization, and generate karaoke subtitles without cloud dependency is a major leap forward.",
+      segments: [
+        {
+          start: 0.0,
+          end: 6.8,
+          speaker: "Alex (Host)",
+          text: "Welcome back to Tech Horizons. Today we're exploring local AI architectures and offline speech recognition.",
+          words: [
+            { word: "Welcome", start: 0.0, end: 0.5, probability: 0.98, speaker: "Alex (Host)" },
+            { word: "back", start: 0.55, end: 0.85, probability: 0.99, speaker: "Alex (Host)" },
+            { word: "to", start: 0.9, end: 1.05, probability: 0.99, speaker: "Alex (Host)" },
+            { word: "Tech", start: 1.1, end: 1.45, probability: 0.97, speaker: "Alex (Host)" },
+            { word: "Horizons.", start: 1.5, end: 2.1, probability: 0.99, speaker: "Alex (Host)" },
+            { word: "Today", start: 2.3, end: 2.7, probability: 0.96, speaker: "Alex (Host)" },
+            { word: "we're", start: 2.75, end: 3.0, probability: 0.98, speaker: "Alex (Host)" },
+            { word: "exploring", start: 3.05, end: 3.65, probability: 0.98, speaker: "Alex (Host)" },
+            { word: "local", start: 3.7, end: 4.1, probability: 0.97, speaker: "Alex (Host)" },
+            { word: "AI", start: 4.15, end: 4.5, probability: 0.99, speaker: "Alex (Host)" },
+            { word: "architectures", start: 4.55, end: 5.4, probability: 0.99, speaker: "Alex (Host)" },
+            { word: "and", start: 5.45, end: 5.65, probability: 0.98, speaker: "Alex (Host)" },
+            { word: "offline", start: 5.7, end: 6.15, probability: 0.99, speaker: "Alex (Host)" },
+            { word: "speech", start: 6.2, end: 6.5, probability: 0.99, speaker: "Alex (Host)" },
+            { word: "recognition.", start: 6.55, end: 6.8, probability: 0.98, speaker: "Alex (Host)" }
+          ]
+        },
+        {
+          start: 7.2,
+          end: 16.5,
+          speaker: "Dr. Aris (AI Researcher)",
+          text: "Thanks Alex. Running neural models directly on CPU using INT8 quantization and ONNX has unlocked incredible speed and privacy for end users.",
+          words: [
+            { word: "Thanks", start: 7.2, end: 7.6, probability: 0.98, speaker: "Dr. Aris (AI Researcher)" },
+            { word: "Alex.", start: 7.65, end: 8.05, probability: 0.99, speaker: "Dr. Aris (AI Researcher)" },
+            { word: "Running", start: 8.2, end: 8.65, probability: 0.97, speaker: "Dr. Aris (AI Researcher)" },
+            { word: "neural", start: 8.7, end: 9.1, probability: 0.99, speaker: "Dr. Aris (AI Researcher)" },
+            { word: "models", start: 9.15, end: 9.6, probability: 0.99, speaker: "Dr. Aris (AI Researcher)" },
+            { word: "directly", start: 9.65, end: 10.15, probability: 0.98, speaker: "Dr. Aris (AI Researcher)" },
+            { word: "on", start: 10.2, end: 10.35, probability: 0.99, speaker: "Dr. Aris (AI Researcher)" },
+            { word: "CPU", start: 10.4, end: 10.85, probability: 0.99, speaker: "Dr. Aris (AI Researcher)" },
+            { word: "using", start: 10.9, end: 11.25, probability: 0.97, speaker: "Dr. Aris (AI Researcher)" },
+            { word: "INT8", start: 11.3, end: 11.8, probability: 0.98, speaker: "Dr. Aris (AI Researcher)" },
+            { word: "quantization", start: 11.85, end: 12.7, probability: 0.99, speaker: "Dr. Aris (AI Researcher)" },
+            { word: "and", start: 12.75, end: 12.95, probability: 0.98, speaker: "Dr. Aris (AI Researcher)" },
+            { word: "ONNX", start: 13.0, end: 13.6, probability: 0.99, speaker: "Dr. Aris (AI Researcher)" },
+            { word: "has", start: 13.65, end: 13.85, probability: 0.98, speaker: "Dr. Aris (AI Researcher)" },
+            { word: "unlocked", start: 13.9, end: 14.45, probability: 0.99, speaker: "Dr. Aris (AI Researcher)" },
+            { word: "incredible", start: 14.5, end: 15.1, probability: 0.99, speaker: "Dr. Aris (AI Researcher)" },
+            { word: "speed", start: 15.15, end: 15.65, probability: 0.99, speaker: "Dr. Aris (AI Researcher)" },
+            { word: "and", start: 15.7, end: 15.85, probability: 0.97, speaker: "Dr. Aris (AI Researcher)" },
+            { word: "privacy.", start: 15.9, end: 16.5, probability: 0.99, speaker: "Dr. Aris (AI Researcher)" }
+          ]
+        },
+        {
+          start: 17.0,
+          end: 26.2,
+          speaker: "Alex (Host)",
+          text: "The ability to isolate audio, align speaker diarization, and generate karaoke subtitles without cloud dependency is a major leap forward.",
+          words: [
+            { word: "The", start: 17.0, end: 17.2, probability: 0.99, speaker: "Alex (Host)" },
+            { word: "ability", start: 17.25, end: 17.75, probability: 0.99, speaker: "Alex (Host)" },
+            { word: "to", start: 17.8, end: 17.95, probability: 0.98, speaker: "Alex (Host)" },
+            { word: "isolate", start: 18.0, end: 18.55, probability: 0.99, speaker: "Alex (Host)" },
+            { word: "audio,", start: 18.6, end: 19.1, probability: 0.98, speaker: "Alex (Host)" },
+            { word: "align", start: 19.2, end: 19.65, probability: 0.99, speaker: "Alex (Host)" },
+            { word: "speaker", start: 19.7, end: 20.15, probability: 0.99, speaker: "Alex (Host)" },
+            { word: "diarization,", start: 20.2, end: 21.05, probability: 0.99, speaker: "Alex (Host)" },
+            { word: "and", start: 21.1, end: 21.25, probability: 0.98, speaker: "Alex (Host)" },
+            { word: "generate", start: 21.3, end: 21.85, probability: 0.99, speaker: "Alex (Host)" },
+            { word: "karaoke", start: 21.9, end: 22.45, probability: 0.98, speaker: "Alex (Host)" },
+            { word: "subtitles", start: 22.5, end: 23.2, probability: 0.99, speaker: "Alex (Host)" },
+            { word: "without", start: 23.25, end: 23.7, probability: 0.99, speaker: "Alex (Host)" },
+            { word: "cloud", start: 23.75, end: 24.15, probability: 0.99, speaker: "Alex (Host)" },
+            { word: "dependency", start: 24.2, end: 24.95, probability: 0.99, speaker: "Alex (Host)" },
+            { word: "is", start: 25.0, end: 25.15, probability: 0.98, speaker: "Alex (Host)" },
+            { word: "a", start: 25.2, end: 25.3, probability: 0.99, speaker: "Alex (Host)" },
+            { word: "major", start: 25.35, end: 25.75, probability: 0.99, speaker: "Alex (Host)" },
+            { word: "leap", start: 25.8, end: 26.05, probability: 0.99, speaker: "Alex (Host)" },
+            { word: "forward.", start: 26.1, end: 26.2, probability: 0.99, speaker: "Alex (Host)" }
+          ]
+        }
+      ]
+    };
+
+    currentResult = Object.assign(currentResult, demoResult);
+    resultsContainer.classList.remove("hidden");
+    renderSpeakerDialogue(currentResult);
+    transcriptionStats.textContent = "Duration: 42.8s • Processed in: 1.4s • Language: EN • 2 Speakers Identified";
+    transcriptPlainText.textContent = demoResult.text;
+    if (typeof marked !== "undefined") {
+      summaryContent.innerHTML = marked.parse(demoResult.summary);
+    }
+    polishContent.textContent = demoResult.polished;
+
+    const urlParams = new URLSearchParams(window.location.search);
+    if (urlParams.get("tab") === "summary") {
+      switchResultTab("summary");
+    } else if (urlParams.get("tab") === "polish") {
+      switchResultTab("polish");
+    }
+
+    if (window.lucide) {
+      lucide.createIcons();
+    }
+  }
+
+  const urlParams = new URLSearchParams(window.location.search);
+  if (urlParams.get("demo") === "1" || urlParams.get("demo") === "true") {
+    loadDemoData();
+  }
+
   checkSystemStatus();
 });

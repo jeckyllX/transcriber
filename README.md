@@ -2,6 +2,10 @@
 
 A modular audio transcription and AI analysis platform. Accepts audio/video media in any format, standardizes it to Whisper-optimized 16kHz mono WAV via FFmpeg, transcribes it with Whisper, polishes or summarizes it with selectable LLM models (Ollama or OpenAI-compatible), and dispatches notifications across multiple channels (Telegram, Webhooks).
 
+<p align="center">
+  <img src="docs/screenshots/dashboard.png" alt="Audio Transcriber & AI Summarizer Dashboard" width="100%">
+</p>
+
 ---
 
 ## Key Features
@@ -11,9 +15,18 @@ A modular audio transcription and AI analysis platform. Accepts audio/video medi
 - **Whisper Transcription Engine**:
   - `faster-whisper` (CTranslate2 with CPU `int8` quantization for fast, low-memory inference).
   - `whisper.cpp` standalone C++ binary runner with SHA256 verification and compilation fallback.
-  - Generates plain text, timestamped interactive segments, and subtitle exports (**SRT**, **WebVTT**, **JSON**).
+  - Generates plain text, timestamped interactive segments, and subtitle exports (**SRT**, **WebVTT**, **ASS**, **JSON**).
+- **Speaker Diarization (ONNX)**:
+  - Offline multi-speaker identification and dialogue turn segmentation powered by `sherpa-onnx` (Pyannote 3.0 segmentation + 3D-Speaker embedding neural networks).
+  - 100% CPU inference with zero PyTorch or GPU requirements.
+  - On-demand model provisioning: models are fetched automatically only when diarization is first requested.
+  - Interactive inline speaker renaming that updates exports and dialogue turns in real time.
+- **Word-Level Precision & Karaoke Playback**:
+  - Precise word-level timestamps with speech recognition confidence scores.
+  - Real-time karaoke-style word highlighting synchronized with audio playback.
+  - Click-to-seek navigation: clicking any word or timestamp instantly seeks the audio player to that exact moment.
 - **Extensible AI Intelligence (Ollama & Beyond)**:
-  - **Transcript Polish**: Removes filler words ("um", "uh"), stutters, and phonetic speech-to-text anomalies while preserving exact meaning and tone.
+  - **Transcript Polish**: Removes filler words ("um", "uh"), stutters, and phonetic speech-to-text anomalies while preserving exact meaning and speaker headers.
   - **Multi-Level Summarization**: Select between *Brief TL;DR*, *Key Takeaways (Bullets)*, *Detailed Structured Report*, *Action Items Checklist*, or a *Custom Prompt*.
   - **Dynamic Model Manager**: Live queries installed Ollama models and provides in-browser model pulling with progress streaming.
   - **OpenAI-Compatible Extensibility**: Easily switch to OpenAI, Groq, DeepSeek, Mistral AI, or self-hosted vLLM.
@@ -24,8 +37,8 @@ A modular audio transcription and AI analysis platform. Accepts audio/video medi
 - **Modern Responsive Dashboard**:
   - Drag-and-drop file upload with format inspection.
   - In-browser microphone audio recorder.
-  - Audio waveform player with interactive timestamp seeking (click any segment timestamp to seek audio).
-  - Dark/Light modern theme built with Tailwind CSS and Lucide icons.
+  - Audio player with interactive timestamp seeking and word karaoke highlighting.
+  - Clean dark theme built with Tailwind CSS and Lucide icons.
   - Zero Node/NPM dependencies needed to run.
 
 ---
@@ -97,16 +110,22 @@ Run the full regression test suite:
 transcriber/
 ├── audio_processor.py         # FFmpeg universal conversion & media metadata probe
 ├── config.py                  # Zero-hardcoding, dynamic environment configuration
+├── jobs.py                    # Job lifecycle management, semaphore concurrency, and SSE
 ├── main.py                    # FastAPI server & Server-Sent Events (SSE) streaming
 ├── install.sh                 # Architecture-aware installer with SHA256 validation
 ├── run.sh                     # Application runner
+├── diarization/               # Lightweight Offline Diarization Subsystem (Sherpa-ONNX)
+│   ├── base.py                # BaseDiarizer, SpeakerInterval & DiarizationResult DTOs
+│   ├── sherpa_diarizer.py     # Pyannote 3.0 + 3D-Speaker ONNX runner (on-demand download)
+│   ├── alignment.py           # Temporal overlap alignment mapping speakers to segments/words
+│   └── factory.py             # Diarizer dynamic factory and engine registry
 ├── notifications/             # Modular Notification System (Open/Closed Principle)
 │   ├── base.py                # BaseNotifier & NotificationPayload DTO
 │   ├── telegram.py            # TelegramNotifier (auto-chunking & document attachments)
 │   ├── webhook.py             # Generic WebhookNotifier
 │   └── dispatcher.py          # Asynchronous concurrent dispatcher
 ├── transcribers/              # Pluggable Transcriber Subsystem
-│   ├── base.py                # BaseTranscriber & TranscriptionResult (SRT, VTT, JSON)
+│   ├── base.py                # BaseTranscriber, TranscriptionResult (TXT, SRT, VTT, ASS, JSON)
 │   ├── faster_whisper.py      # CTranslate2 Python engine
 │   ├── whisper_cpp.py         # Standalone C++ binary adapter
 │   └── factory.py             # Dynamic transcriber resolution
@@ -114,14 +133,14 @@ transcriber/
 │   ├── base.py                # BaseLLMProvider interface
 │   ├── ollama.py              # Ollama client with token streaming & model pulling
 │   ├── openai_compat.py       # OpenAI-compatible client (/v1/chat/completions)
-│   ├── prompts.py             # Decoupled prompts (Polish + 5 summary tiers)
+│   ├── prompts.py             # Decoupled prompts (Polish + 5 summary tiers with speaker headers)
 │   └── registry.py            # LLM provider registry
 ├── templates/
 │   └── index.html             # Modern responsive web dashboard
 ├── static/
-│   ├── app.js                 # UI controller, mic recording, SSE streams
+│   ├── app.js                 # UI controller, mic recording, SSE streams, speaker editing
 │   └── style.css              # Custom styling & animations
-└── tests/                     # 14 automated tests covering all subsystems
+└── tests/                     # 29 automated tests covering all subsystems
 ```
 
 ---
