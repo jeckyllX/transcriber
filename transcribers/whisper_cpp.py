@@ -16,7 +16,7 @@ except ImportError:
     np = None
 
 from config import settings
-from transcribers.base import BaseTranscriber, Segment, TranscriptionResult
+from transcribers.base import BaseTranscriber, Segment, TranscriptionResult, Word
 
 logger = logging.getLogger(__name__)
 
@@ -58,6 +58,7 @@ class WhisperCppTranscriber(BaseTranscriber):
         language: str | None = None,
         vad_filter: bool = True,
         on_segment: Callable[[Segment], None] | None = None,
+        word_timestamps: bool = True,
         **kwargs: Any,
     ) -> TranscriptionResult:
         if not self.is_available():
@@ -86,7 +87,7 @@ class WhisperCppTranscriber(BaseTranscriber):
                 str(self.bin_path),
                 "-m", str(model_path),
                 "-f", str(audio_path),
-                "-oj",
+                "-ojf" if word_timestamps else "-oj",
                 "-of", str(out_prefix),
             ]
 
@@ -128,7 +129,28 @@ class WhisperCppTranscriber(BaseTranscriber):
                     t1 = s.get("offsets", {}).get("to", 0) / 1000.0 if "offsets" in s else s.get("to", 0) / 1000.0
                     text = s.get("text", "").strip()
                     if text:
-                        seg = Segment(id=i, start=t0, end=t1, text=text)
+                        words: list[Word] = []
+                        raw_tokens = s.get("tokens", [])
+                        for tok in raw_tokens:
+                            txt = tok.get("text", "")
+                            if txt.startswith("[_") or txt.startswith("<|"):
+                                continue
+                            offsets = tok.get("offsets", {})
+                            wt0 = offsets.get("from", 0) / 1000.0
+                            wt1 = offsets.get("to", 0) / 1000.0
+                            p = tok.get("p")
+                            p_float = round(p, 3) if p is not None else None
+                            if txt.startswith(" ") or not words:
+                                clean = txt.strip()
+                                if clean:
+                                    words.append(Word(word=clean, start=wt0, end=wt1, probability=p_float))
+                            else:
+                                words[-1].word += txt
+                                words[-1].end = max(words[-1].end, wt1)
+                                if p_float is not None and words[-1].probability is not None:
+                                    words[-1].probability = round((words[-1].probability + p_float) / 2, 3)
+
+                        seg = Segment(id=i, start=t0, end=t1, text=text, words=words)
                         segments.append(seg)
                         full_text_parts.append(text)
                         if on_segment:

@@ -13,6 +13,14 @@ except ImportError:
 from pydantic import BaseModel, Field
 
 
+class Word(BaseModel):
+    """A timestamped word within a segment."""
+    word: str
+    start: float
+    end: float
+    probability: float | None = None
+
+
 class Segment(BaseModel):
     """A timestamped segment of transcription."""
     id: int
@@ -20,6 +28,7 @@ class Segment(BaseModel):
     end: float
     text: str
     confidence: float | None = None
+    words: list[Word] = Field(default_factory=list)
 
 
 class TranscriptionResult(BaseModel):
@@ -37,6 +46,17 @@ class TranscriptionResult(BaseModel):
         millis = int(round((seconds - int(seconds)) * 1000))
         delimiter = "," if srt_format else "."
         return f"{hrs:02d}:{mins:02d}:{secs:02d}{delimiter}{millis:03d}"
+
+    @staticmethod
+    def _format_ass_timestamp(seconds: float) -> str:
+        hrs = int(seconds // 3600)
+        mins = int((seconds % 3600) // 60)
+        secs = int(seconds % 60)
+        centis = int(round((seconds - int(seconds)) * 100))
+        if centis >= 100:
+            secs += 1
+            centis -= 100
+        return f"{hrs}:{mins:02d}:{secs:02d}.{centis:02d}"
 
     def to_txt(self) -> str:
         return self.text.strip()
@@ -56,6 +76,54 @@ class TranscriptionResult(BaseModel):
             end_str = self._format_timestamp(seg.end, srt_format=False)
             lines.append(f"{start_str} --> {end_str}\n{seg.text.strip()}\n")
         return "\n".join(lines).strip()
+
+    def to_word_vtt(self) -> str:
+        lines = ["WEBVTT\n"]
+        for seg in self.segments:
+            start_str = self._format_timestamp(seg.start, srt_format=False)
+            end_str = self._format_timestamp(seg.end, srt_format=False)
+            lines.append(f"{start_str} --> {end_str}")
+            if seg.words:
+                word_cues = []
+                for w in seg.words:
+                    w_start = self._format_timestamp(w.start, srt_format=False)
+                    word_cues.append(f"<{w_start}>{w.word}")
+                lines.append(" ".join(word_cues) + "\n")
+            else:
+                lines.append(f"{seg.text.strip()}\n")
+        return "\n".join(lines).strip()
+
+    def to_ass(self, title: str = "Transcription") -> str:
+        header = (
+            "[Script Info]\n"
+            f"Title: {title}\n"
+            "ScriptType: v4.00+\n"
+            "WrapStyle: 0\n"
+            "PlayResX: 1920\n"
+            "PlayResY: 1080\n"
+            "ScaledBorderAndShadow: yes\n\n"
+            "[V4+ Styles]\n"
+            "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding\n"
+            "Style: Default,Arial,42,&H00FFFFFF,&H000000FF,&H00000000,&H80000000,0,0,0,0,100,100,0,0,1,2,1,2,20,20,50,1\n"
+            "Style: Karaoke,Arial,44,&H00FFFFFF,&H0000FFFF,&H00000000,&H80000000,-1,0,0,0,100,100,0,0,1,2,1,2,20,20,50,1\n\n"
+            "[Events]\n"
+            "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n"
+        )
+        dialogues = []
+        for seg in self.segments:
+            start_str = self._format_ass_timestamp(seg.start)
+            end_str = self._format_ass_timestamp(seg.end)
+            if seg.words:
+                k_parts = []
+                for w in seg.words:
+                    duration_cs = max(1, int(round((w.end - w.start) * 100)))
+                    k_parts.append(f"{{\\k{duration_cs}}}{w.word}")
+                karaoke_text = " ".join(k_parts)
+                dialogues.append(f"Dialogue: 0,{start_str},{end_str},Karaoke,,0,0,0,,{karaoke_text}")
+            else:
+                dialogues.append(f"Dialogue: 0,{start_str},{end_str},Default,,0,0,0,,{seg.text.strip()}")
+
+        return header + "\n".join(dialogues) + "\n"
 
     def to_json(self) -> str:
         return self.model_dump_json(indent=2)

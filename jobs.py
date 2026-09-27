@@ -157,6 +157,8 @@ class JobManager:
                 "text": transcription_result.to_txt(),
                 "srt": transcription_result.to_srt(),
                 "vtt": transcription_result.to_vtt(),
+                "ass": transcription_result.to_ass(),
+                "word_vtt": transcription_result.to_word_vtt(),
                 "segments": [s.model_dump() for s in transcription_result.segments],
                 "polished": None,
                 "summary": None,

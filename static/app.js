@@ -56,6 +56,7 @@ document.addEventListener("DOMContentLoaded", () => {
   const downloadTxtBtn = document.getElementById("download-txt-btn");
   const downloadSrtBtn = document.getElementById("download-srt-btn");
   const downloadVttBtn = document.getElementById("download-vtt-btn");
+  const downloadAssBtn = document.getElementById("download-ass-btn");
 
   const openSettingsBtn = document.getElementById("open-settings-btn");
   const closeSettingsBtn = document.getElementById("close-settings-btn");
@@ -85,6 +86,8 @@ document.addEventListener("DOMContentLoaded", () => {
     text: "",
     srt: "",
     vtt: "",
+    ass: "",
+    word_vtt: "",
     segments: [],
     polished: "",
     summary: "",
@@ -388,8 +391,16 @@ document.addEventListener("DOMContentLoaded", () => {
         currentResult.text = finalResult.text;
         currentResult.srt = finalResult.srt;
         currentResult.vtt = finalResult.vtt;
+        currentResult.ass = finalResult.ass || "";
+        currentResult.word_vtt = finalResult.word_vtt || "";
         currentResult.duration = finalResult.duration;
         currentResult.processing_time = finalResult.processing_time;
+        currentResult.segments = finalResult.segments || [];
+
+        if (finalResult.segments && finalResult.segments.length > 0) {
+          transcriptSegmentsList.innerHTML = "";
+          finalResult.segments.forEach((seg) => appendLiveSegment(seg));
+        }
 
         if (finalResult.summary && !finalResult.summary.startsWith("[AI summary skipped")) {
           currentResult.summary = finalResult.summary;
@@ -435,7 +446,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
   function appendLiveSegment(seg) {
     const div = document.createElement("div");
-    div.className = "segment-item flex items-start gap-3 p-2.5 rounded-lg bg-slate-950/40 border border-slate-800/80 text-xs";
+    div.className = "segment-item flex items-start gap-3 p-2.5 rounded-lg bg-slate-950/40 border border-slate-800/80 text-xs hover:border-slate-700/80 transition-colors";
     
     const timeBtn = document.createElement("button");
     timeBtn.className = "px-2 py-0.5 rounded bg-indigo-500/10 text-indigo-400 font-mono text-[11px] flex-shrink-0 hover:bg-indigo-500/20";
@@ -450,8 +461,30 @@ document.addEventListener("DOMContentLoaded", () => {
     });
 
     const textSpan = document.createElement("span");
-    textSpan.className = "text-slate-200 leading-relaxed flex-1";
-    textSpan.textContent = seg.text;
+    textSpan.className = "text-slate-200 leading-relaxed flex-1 flex flex-wrap gap-x-1 gap-y-0.5";
+
+    if (seg.words && seg.words.length > 0) {
+      seg.words.forEach((w) => {
+        const wSpan = document.createElement("span");
+        wSpan.className = "word-token px-1 py-0.5 rounded cursor-pointer transition-colors duration-150 hover:bg-indigo-500/30 hover:text-indigo-200";
+        wSpan.textContent = w.word;
+        wSpan.dataset.start = w.start;
+        wSpan.dataset.end = w.end;
+        const confStr = w.probability !== null && w.probability !== undefined ? ` (${Math.round(w.probability * 100)}%)` : "";
+        wSpan.title = `${w.start.toFixed(2)}s - ${w.end.toFixed(2)}s${confStr}`;
+        wSpan.addEventListener("click", (e) => {
+          e.stopPropagation();
+          const activeAudio = audioPreview.src ? audioPreview : recordPreview;
+          if (activeAudio) {
+            activeAudio.currentTime = w.start;
+            activeAudio.play();
+          }
+        });
+        textSpan.appendChild(wSpan);
+      });
+    } else {
+      textSpan.textContent = seg.text;
+    }
 
     div.appendChild(timeBtn);
     div.appendChild(textSpan);
@@ -557,6 +590,29 @@ document.addEventListener("DOMContentLoaded", () => {
   downloadTxtBtn.addEventListener("click", () => downloadFile("transcript.txt", currentResult.text, "text/plain"));
   downloadSrtBtn.addEventListener("click", () => downloadFile("subtitles.srt", currentResult.srt, "text/plain"));
   downloadVttBtn.addEventListener("click", () => downloadFile("subtitles.vtt", currentResult.vtt, "text/vtt"));
+  if (downloadAssBtn) {
+    downloadAssBtn.addEventListener("click", () => downloadFile("subtitles.ass", currentResult.ass || "", "text/plain"));
+  }
+
+  // Real-time audio playback word synchronization (Karaoke highlight)
+  function setupAudioWordSync(audioEl) {
+    if (!audioEl) return;
+    audioEl.addEventListener("timeupdate", () => {
+      const cur = audioEl.currentTime;
+      const allWordTokens = transcriptSegmentsList.querySelectorAll(".word-token");
+      allWordTokens.forEach((token) => {
+        const st = parseFloat(token.dataset.start);
+        const en = parseFloat(token.dataset.end);
+        if (cur >= st && cur <= en) {
+          token.classList.add("bg-indigo-600", "text-white", "font-semibold", "shadow-sm");
+        } else {
+          token.classList.remove("bg-indigo-600", "text-white", "font-semibold", "shadow-sm");
+        }
+      });
+    });
+  }
+  setupAudioWordSync(audioPreview);
+  setupAudioWordSync(recordPreview);
 
   // Settings Modal Handlers
   openSettingsBtn.addEventListener("click", () => settingsModal.classList.remove("hidden"));

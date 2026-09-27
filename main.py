@@ -301,6 +301,8 @@ async def transcribe_audio(
             "text": result.to_txt(),
             "srt": result.to_srt(),
             "vtt": result.to_vtt(),
+            "ass": result.to_ass(),
+            "word_vtt": result.to_word_vtt(),
             "segments": [s.model_dump() for s in result.segments],
         }
 

@@ -11,7 +11,7 @@ try:
 except ImportError:
     np = None
 
-from transcribers.base import BaseTranscriber, Segment, TranscriptionResult
+from transcribers.base import BaseTranscriber, Segment, TranscriptionResult, Word
 
 logger = logging.getLogger(__name__)
 
@@ -48,6 +48,7 @@ class FasterWhisperTranscriber(BaseTranscriber):
         language: str | None = None,
         vad_filter: bool = True,
         on_segment: Callable[[Segment], None] | None = None,
+        word_timestamps: bool = True,
         **kwargs: Any,
     ) -> TranscriptionResult:
         if not self.is_available():
@@ -73,6 +74,7 @@ class FasterWhisperTranscriber(BaseTranscriber):
             beam_size=5,
             vad_filter=vad_filter,
             vad_parameters=vad_params,
+            word_timestamps=word_timestamps,
         )
 
         segments: list[Segment] = []
@@ -81,12 +83,25 @@ class FasterWhisperTranscriber(BaseTranscriber):
         for i, s in enumerate(raw_segments):
             clean_text = s.text.strip()
             if clean_text:
+                word_list: list[Word] = []
+                if hasattr(s, "words") and s.words:
+                    for w in s.words:
+                        w_text = w.word.strip()
+                        if w_text:
+                            word_list.append(Word(
+                                word=w_text,
+                                start=round(w.start, 3),
+                                end=round(w.end, 3),
+                                probability=round(w.probability, 3) if hasattr(w, "probability") else None,
+                            ))
+
                 seg = Segment(
                     id=i,
                     start=round(s.start, 2),
                     end=round(s.end, 2),
                     text=clean_text,
                     confidence=round(s.avg_logprob, 3) if hasattr(s, "avg_logprob") else None,
+                    words=word_list,
                 )
                 segments.append(seg)
                 text_parts.append(clean_text)
