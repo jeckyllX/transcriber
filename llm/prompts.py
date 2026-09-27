@@ -19,7 +19,8 @@ def get_polish_prompt(transcript: str) -> tuple[str, str]:
         "2. Fix punctuation, capitalization, and paragraph spacing for clarity.\n"
         "3. Correct evident speech-to-text phonetic misrecognitions while preserving technical terminology.\n"
         "4. DO NOT alter the speaker's meaning, tone, facts, or key vocabulary.\n"
-        "5. Output ONLY the polished transcript. Do not prepend greetings, explanations, or commentary."
+        "5. If speaker labels (e.g., '[Speaker 0]:' or '[Alice]:') are present, strictly preserve speaker attribution headers.\n"
+        "6. Output ONLY the polished transcript. Do not prepend greetings, explanations, or commentary."
     )
     user_prompt = f"Please polish the following audio transcript:\n\n{transcript.strip()}"
     return system_prompt, user_prompt
@@ -52,6 +53,7 @@ def get_summary_prompt(
         system_prompt = (
             "You are an executive summary specialist. Summarize the transcript into clear, "
             "high-impact bullet points highlighting key insights, decisions, and takeaways. "
+            "If speaker labels are present, attribute key viewpoints or commitments to the respective speakers. "
             "Organize them logically and avoid unnecessary filler."
         )
         user_prompt = f"Please extract the key takeaways in bullet points from this transcript:\n\n{transcript.strip()}"
@@ -64,6 +66,7 @@ def get_summary_prompt(
             "- ## Key Discussion Topics & Decisions\n"
             "- ## Detailed Insights\n"
             "- ## Conclusion\n"
+            "If speaker labels are present, attribute discussion points and decisions to the respective participants. "
             "Be thorough, objective, and accurately reflect all nuances."
         )
         user_prompt = f"Provide a comprehensive, detailed summary of this transcript:\n\n{transcript.strip()}"
@@ -72,7 +75,8 @@ def get_summary_prompt(
         system_prompt = (
             "You are an agile project manager. Analyze the transcript and extract all action items, "
             "tasks, commitments, and deadlines.\n"
-            "Format as a Markdown checklist (- [ ] Task description [Assignee/Context]). "
+            "Format as a Markdown checklist (- [ ] Task description [Assignee/Speaker]). "
+            "If speaker labels are present, attribute tasks directly to the identified speaker. "
             "If no action items are present, explicitly state 'No actionable tasks identified.'"
         )
         user_prompt = f"Extract all action items and next steps from this transcript:\n\n{transcript.strip()}"

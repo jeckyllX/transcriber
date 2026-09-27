@@ -33,3 +33,20 @@
 .recording-active {
   animation: record-pulse 1.8s infinite;
 }
+
+/* Speaker dialogue turn cards */
+.speaker-turn-card {
+  transition: all 0.2s ease-in-out;
+}
+.speaker-turn-card:hover {
+  border-color: rgba(99, 102, 241, 0.4);
+}
+
+.speaker-badge-btn {
+  transition: all 0.15s ease-in-out;
+  cursor: pointer;
+}
+.speaker-badge-btn:hover {
+  transform: translateY(-1px);
+  filter: brightness(1.15);
+}

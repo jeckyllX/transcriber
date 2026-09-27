@@ -57,6 +57,11 @@ document.addEventListener("DOMContentLoaded", () => {
   const downloadSrtBtn = document.getElementById("download-srt-btn");
   const downloadVttBtn = document.getElementById("download-vtt-btn");
   const downloadAssBtn = document.getElementById("download-ass-btn");
+  const downloadJsonBtn = document.getElementById("download-json-btn");
+
+  const diarizationCheckbox = document.getElementById("diarization-checkbox");
+  const diarizationBadge = document.getElementById("diarization-badge");
+  const numSpeakersSelect = document.getElementById("num-speakers-select");
 
   const openSettingsBtn = document.getElementById("open-settings-btn");
   const closeSettingsBtn = document.getElementById("close-settings-btn");
@@ -89,6 +94,8 @@ document.addEventListener("DOMContentLoaded", () => {
     ass: "",
     word_vtt: "",
     segments: [],
+    speaker_turns: [],
+    num_speakers: 0,
     polished: "",
     summary: "",
     duration: 0,
@@ -96,6 +103,26 @@ document.addEventListener("DOMContentLoaded", () => {
     filename: "",
     task_id: "",
   };
+
+  const speakerPalette = [
+    { badge: "bg-indigo-500/20 text-indigo-300 border-indigo-500/40 hover:bg-indigo-500/30" },
+    { badge: "bg-emerald-500/20 text-emerald-300 border-emerald-500/40 hover:bg-emerald-500/30" },
+    { badge: "bg-amber-500/20 text-amber-300 border-amber-500/40 hover:bg-amber-500/30" },
+    { badge: "bg-rose-500/20 text-rose-300 border-rose-500/40 hover:bg-rose-500/30" },
+    { badge: "bg-cyan-500/20 text-cyan-300 border-cyan-500/40 hover:bg-cyan-500/30" },
+    { badge: "bg-purple-500/20 text-purple-300 border-purple-500/40 hover:bg-purple-500/30" },
+  ];
+
+  function getSpeakerStyle(speakerName) {
+    if (!speakerName) return speakerPalette[0];
+    let hash = 0;
+    for (let i = 0; i < speakerName.length; i++) {
+      hash = (hash << 5) - hash + speakerName.charCodeAt(i);
+      hash |= 0;
+    }
+    const idx = Math.abs(hash) % speakerPalette.length;
+    return speakerPalette[idx];
+  }
 
   // Check Ollama and System status on load
   async function checkSystemStatus() {
@@ -114,6 +141,18 @@ document.addEventListener("DOMContentLoaded", () => {
           <span class="w-2 h-2 rounded-full bg-amber-400"></span>
           <span>Ollama Offline / Remote</span>
         `;
+      }
+
+      if (data.diarization_engines) {
+        const availableEngine = data.diarization_engines.find((e) => e.available);
+        if (availableEngine && diarizationBadge) {
+          diarizationBadge.className = "text-[10px] px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 font-medium";
+          diarizationBadge.textContent = "ONNX Ready";
+        } else if (diarizationBadge) {
+          diarizationBadge.className = "text-[10px] px-2 py-0.5 rounded-full bg-amber-500/10 text-amber-400 border border-amber-500/20 font-medium";
+          diarizationBadge.textContent = "Models Missing";
+          if (diarizationCheckbox) diarizationCheckbox.checked = false;
+        }
       }
 
       await loadLlmModels();
@@ -334,6 +373,8 @@ document.addEventListener("DOMContentLoaded", () => {
       formData.append("whisper_model", whisperModelSelect.value);
       formData.append("language", languageSelect.value);
       formData.append("vad_filter", vadCheckbox ? vadCheckbox.checked : true);
+      formData.append("enable_diarization", diarizationCheckbox ? diarizationCheckbox.checked : false);
+      formData.append("num_speakers", numSpeakersSelect ? numSpeakersSelect.value : -1);
       formData.append("ai_action", activeAiAction);
       formData.append("summary_level", activeSummaryLevel);
       formData.append("llm_provider", llmProviderSelect.value);
@@ -362,6 +403,19 @@ document.addEventListener("DOMContentLoaded", () => {
         updateProgressBar(data.progress, data.message, `${data.progress}%`);
       });
 
+      eventSource.addEventListener("diarization", (e) => {
+        const data = JSON.parse(e.data);
+        updateProgressBar(65, `Diarization complete (${data.num_speakers} speakers detected)`, "65%");
+      });
+
+      eventSource.addEventListener("speaker_renamed", (e) => {
+        const data = JSON.parse(e.data);
+        if (data.speaker_turns) {
+          currentResult.speaker_turns = data.speaker_turns;
+          renderSpeakerDialogue(currentResult);
+        }
+      });
+
       eventSource.addEventListener("segment", (e) => {
         const seg = JSON.parse(e.data);
         currentResult.segments.push(seg);
@@ -388,18 +442,10 @@ document.addEventListener("DOMContentLoaded", () => {
         startProcessBtn.disabled = false;
         startProcessBtn.classList.remove("opacity-50", "cursor-not-allowed");
 
-        currentResult.text = finalResult.text;
-        currentResult.srt = finalResult.srt;
-        currentResult.vtt = finalResult.vtt;
-        currentResult.ass = finalResult.ass || "";
-        currentResult.word_vtt = finalResult.word_vtt || "";
-        currentResult.duration = finalResult.duration;
-        currentResult.processing_time = finalResult.processing_time;
-        currentResult.segments = finalResult.segments || [];
+        currentResult = Object.assign(currentResult, finalResult);
 
         if (finalResult.segments && finalResult.segments.length > 0) {
-          transcriptSegmentsList.innerHTML = "";
-          finalResult.segments.forEach((seg) => appendLiveSegment(seg));
+          renderSpeakerDialogue(currentResult);
         }
 
         if (finalResult.summary && !finalResult.summary.startsWith("[AI summary skipped")) {
@@ -416,7 +462,8 @@ document.addEventListener("DOMContentLoaded", () => {
           polishContent.innerHTML = renderAiUnavailableNotice("Polish", finalResult.ai_warning || (finalResult.polished ? finalResult.polished.replace(/^\[|\]$/g, "") : null));
         }
 
-        transcriptionStats.textContent = `Duration: ${finalResult.duration.toFixed(1)}s • Processed in: ${finalResult.processing_time}s • Language: ${finalResult.language.toUpperCase()}`;
+        const speakerCountStr = finalResult.num_speakers ? ` • ${finalResult.num_speakers} Speaker${finalResult.num_speakers > 1 ? "s" : ""} Identified` : "";
+        transcriptionStats.textContent = `Duration: ${finalResult.duration.toFixed(1)}s • Processed in: ${finalResult.processing_time}s • Language: ${(finalResult.language || "auto").toUpperCase()}${speakerCountStr}`;
         transcriptPlainText.textContent = finalResult.text;
       });
 
@@ -496,6 +543,147 @@ document.addEventListener("DOMContentLoaded", () => {
     const mins = Math.floor(secs / 60);
     const s = Math.floor(secs % 60);
     return `${String(mins).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
+  }
+
+  function renderSpeakerDialogue(result) {
+    if (!result || !result.segments) return;
+    transcriptSegmentsList.innerHTML = "";
+
+    const hasSpeakers = result.segments.some((s) => s.speaker);
+
+    if (hasSpeakers) {
+      // Group consecutive segments from the same speaker into dialogue turns
+      const turns = [];
+      result.segments.forEach((seg) => {
+        const spk = seg.speaker || "Speaker 0";
+        if (turns.length > 0 && turns[turns.length - 1].speaker === spk) {
+          turns[turns.length - 1].end = seg.end;
+          turns[turns.length - 1].segments.push(seg);
+        } else {
+          turns.push({
+            speaker: spk,
+            start: seg.start,
+            end: seg.end,
+            segments: [seg],
+          });
+        }
+      });
+
+      turns.forEach((turn) => {
+        const card = document.createElement("div");
+        card.className = "speaker-turn-card p-3.5 rounded-xl bg-slate-950/50 border border-slate-800/80 space-y-2 mb-3.5 hover:border-slate-700/80 transition-colors";
+
+        const header = document.createElement("div");
+        header.className = "flex items-center justify-between";
+
+        const style = getSpeakerStyle(turn.speaker);
+        const speakerBtn = document.createElement("button");
+        speakerBtn.className = `speaker-badge-btn px-2.5 py-1 rounded-md text-xs font-semibold flex items-center gap-1.5 border ${style.badge}`;
+        speakerBtn.innerHTML = `
+          <i data-lucide="user" class="w-3.5 h-3.5 inline"></i>
+          <span>${turn.speaker}</span>
+          <i data-lucide="pencil" class="w-2.5 h-2.5 inline opacity-60 ml-0.5"></i>
+        `;
+        speakerBtn.title = "Click to rename this speaker across all turns";
+        speakerBtn.addEventListener("click", () => handleSpeakerRename(turn.speaker));
+
+        const timeBtn = document.createElement("button");
+        timeBtn.className = "px-2 py-0.5 rounded bg-slate-800/80 hover:bg-slate-700 text-slate-300 font-mono text-[11px] transition-colors";
+        timeBtn.textContent = `${formatTimestamp(turn.start)} - ${formatTimestamp(turn.end)}`;
+        timeBtn.title = "Seek audio to turn start";
+        timeBtn.addEventListener("click", () => {
+          const activeAudio = audioPreview.src ? audioPreview : recordPreview;
+          if (activeAudio) {
+            activeAudio.currentTime = turn.start;
+            activeAudio.play();
+          }
+        });
+
+        header.appendChild(speakerBtn);
+        header.appendChild(timeBtn);
+        card.appendChild(header);
+
+        // Turn words & segments
+        const textContainer = document.createElement("div");
+        textContainer.className = "text-sm text-slate-200 leading-relaxed flex flex-wrap gap-x-1 gap-y-0.5 pt-1";
+
+        turn.segments.forEach((seg) => {
+          if (seg.words && seg.words.length > 0) {
+            seg.words.forEach((w) => {
+              const wSpan = document.createElement("span");
+              wSpan.className = "word-token px-1 py-0.5 rounded cursor-pointer transition-colors duration-150 hover:bg-indigo-500/30 hover:text-indigo-200";
+              wSpan.textContent = w.word;
+              wSpan.dataset.start = w.start;
+              wSpan.dataset.end = w.end;
+              const confStr = w.probability !== null && w.probability !== undefined ? ` (${Math.round(w.probability * 100)}%)` : "";
+              wSpan.title = `${w.start.toFixed(2)}s - ${w.end.toFixed(2)}s${confStr}`;
+              wSpan.addEventListener("click", (e) => {
+                e.stopPropagation();
+                const activeAudio = audioPreview.src ? audioPreview : recordPreview;
+                if (activeAudio) {
+                  activeAudio.currentTime = w.start;
+                  activeAudio.play();
+                }
+              });
+              textContainer.appendChild(wSpan);
+            });
+          } else {
+            const segSpan = document.createElement("span");
+            segSpan.textContent = seg.text + " ";
+            textContainer.appendChild(segSpan);
+          }
+        });
+
+        card.appendChild(textContainer);
+        transcriptSegmentsList.appendChild(card);
+      });
+    } else {
+      // Standard segment list without speakers
+      result.segments.forEach((seg) => appendLiveSegment(seg));
+    }
+
+    if (window.lucide) {
+      lucide.createIcons();
+    }
+  }
+
+  async function handleSpeakerRename(oldSpeaker) {
+    const newName = prompt(`Enter new name for "${oldSpeaker}":`, oldSpeaker);
+    if (!newName || !newName.trim() || newName.trim() === oldSpeaker) return;
+    const cleanName = newName.trim();
+
+    if (currentResult.task_id) {
+      try {
+        const resp = await fetch(`/api/jobs/${currentResult.task_id}/rename-speaker`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ old_name: oldSpeaker, new_name: cleanName }),
+        });
+        if (resp.ok) {
+          const data = await resp.json();
+          currentResult = Object.assign(currentResult, data.result);
+          renderSpeakerDialogue(currentResult);
+          transcriptPlainText.textContent = currentResult.text;
+          return;
+        }
+      } catch (e) {
+        console.warn("Backend rename failed, using local update:", e);
+      }
+    }
+
+    // Local client-side rename fallback
+    if (currentResult.segments) {
+      currentResult.segments.forEach((s) => {
+        if (s.speaker === oldSpeaker) s.speaker = cleanName;
+        if (s.words) s.words.forEach((w) => { if (w.speaker === oldSpeaker) w.speaker = cleanName; });
+      });
+    }
+    if (currentResult.srt) currentResult.srt = currentResult.srt.replaceAll(`${oldSpeaker}:`, `${cleanName}:`);
+    if (currentResult.vtt) currentResult.vtt = currentResult.vtt.replaceAll(`<v ${oldSpeaker}>`, `<v ${cleanName}>`);
+    if (currentResult.text) currentResult.text = currentResult.text.replaceAll(`[${oldSpeaker}]:`, `[${cleanName}]:`);
+    if (currentResult.ass) currentResult.ass = currentResult.ass.replaceAll(`,${oldSpeaker},`, `,${cleanName},`);
+    renderSpeakerDialogue(currentResult);
+    transcriptPlainText.textContent = currentResult.text;
   }
 
   toggleTimestamps.addEventListener("change", () => {
@@ -592,6 +780,11 @@ document.addEventListener("DOMContentLoaded", () => {
   downloadVttBtn.addEventListener("click", () => downloadFile("subtitles.vtt", currentResult.vtt, "text/vtt"));
   if (downloadAssBtn) {
     downloadAssBtn.addEventListener("click", () => downloadFile("subtitles.ass", currentResult.ass || "", "text/plain"));
+  }
+  if (downloadJsonBtn) {
+    downloadJsonBtn.addEventListener("click", () => {
+      downloadFile("transcription.json", JSON.stringify(currentResult, null, 2), "application/json");
+    });
   }
 
   // Real-time audio playback word synchronization (Karaoke highlight)

@@ -267,7 +267,33 @@ if [ ! -f "${DEFAULT_MODEL_FILE}" ]; then
 fi
 
 # ------------------------------------------------------------------------------
-# 4. Ollama Status Check
+# 4. Speaker Diarization Models (Sherpa-ONNX Pyannote + 3D-Speaker)
+# ------------------------------------------------------------------------------
+info "Checking speaker diarization ONNX models..."
+SEG_MODEL_DIR="${MODELS_DIR}/sherpa-onnx-pyannote-segmentation-3-0"
+EMB_MODEL_FILE="${MODELS_DIR}/3dspeaker_speech_eres2net_base_sv_zh-cn_3dspeaker_16k.onnx"
+
+if [ ! -f "${SEG_MODEL_DIR}/model.onnx" ] && [ ! -f "${SEG_MODEL_DIR}/model.int8.onnx" ]; then
+    info "Downloading Sherpa-ONNX segmentation model (Pyannote 3.0)..."
+    SEG_TAR="${MODELS_DIR}/sherpa-onnx-pyannote-segmentation-3-0.tar.bz2"
+    curl -f -L -# -o "${SEG_TAR}" "https://github.com/k2-fsa/sherpa-onnx/releases/download/speaker-segmentation-models/sherpa-onnx-pyannote-segmentation-3-0.tar.bz2"
+    tar -xjf "${SEG_TAR}" -C "${MODELS_DIR}"
+    rm -f "${SEG_TAR}"
+    success "Speaker segmentation model extracted."
+else
+    success "Speaker segmentation model found."
+fi
+
+if [ ! -f "${EMB_MODEL_FILE}" ]; then
+    info "Downloading Sherpa-ONNX speaker embedding model (3D-Speaker)..."
+    curl -f -L -# -o "${EMB_MODEL_FILE}" "https://github.com/k2-fsa/sherpa-onnx/releases/download/speaker-recongition-models/3dspeaker_speech_eres2net_base_sv_zh-cn_3dspeaker_16k.onnx"
+    success "Speaker embedding model downloaded."
+else
+    success "Speaker embedding model found."
+fi
+
+# ------------------------------------------------------------------------------
+# 5. Ollama Status Check
 # ------------------------------------------------------------------------------
 info "Checking Ollama connectivity..."
 if curl -s http://127.0.0.1:11434/api/tags >/dev/null 2>&1; then
@@ -279,7 +305,7 @@ else
 fi
 
 # ------------------------------------------------------------------------------
-# 5. Python Virtual Environment Setup
+# 6. Python Virtual Environment Setup
 # ------------------------------------------------------------------------------
 info "Setting up Python virtual environment in ${VENV_DIR}..."
 if [ ! -d "${VENV_DIR}" ]; then

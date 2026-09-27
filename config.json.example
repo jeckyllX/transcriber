@@ -2,7 +2,8 @@
   "server": {
     "host": "0.0.0.0",
     "port": 8000,
-    "debug": false
+    "debug": false,
+    "max_concurrent_jobs": 1
   },
   "whisper": {
     "default_engine": "faster-whisper",
@@ -10,6 +11,12 @@
     "bin_path": null,
     "models_dir": null,
     "use_in_memory_pcm": true
+  },
+  "diarization": {
+    "enabled": true,
+    "seg_model": "sherpa-onnx-pyannote-segmentation-3-0/model.onnx",
+    "emb_model": "3dspeaker_speech_eres2net_base_sv_zh-cn_3dspeaker_16k.onnx",
+    "threshold": 0.5
   },
   "ollama": {
     "base_url": "http://127.0.0.1:11434",

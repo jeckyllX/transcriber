@@ -63,6 +63,7 @@ _openai_cfg = _cfg.get("openai_compatible", {})
 _notif_cfg = _cfg.get("notifications", {})
 _telegram_cfg = _notif_cfg.get("telegram", {})
 _webhook_cfg = _notif_cfg.get("webhook", {})
+_diarization_cfg = _cfg.get("diarization", {})
 
 
 class Settings(BaseModel):
@@ -77,6 +78,9 @@ class Settings(BaseModel):
     )
     debug: bool = Field(
         default_factory=lambda: bool(_server_cfg.get("debug", False)) or os.getenv("DEBUG", "false").lower() in ("1", "true", "yes")
+    )
+    max_concurrent_jobs: int = Field(
+        default_factory=lambda: int(_server_cfg.get("max_concurrent_jobs") or os.getenv("MAX_CONCURRENT_JOBS", "1"))
     )
 
     # Whisper Settings
@@ -143,6 +147,20 @@ class Settings(BaseModel):
     )
     webhook_secret: str | None = Field(
         default_factory=lambda: _webhook_cfg.get("secret") or os.getenv("WEBHOOK_SECRET")
+    )
+
+    # Speaker Diarization Settings (Sherpa-ONNX)
+    diarization_enabled: bool = Field(
+        default_factory=lambda: bool(_diarization_cfg.get("enabled", True)) or os.getenv("DIARIZATION_ENABLED", "true").lower() in ("1", "true", "yes")
+    )
+    diarization_seg_model: str = Field(
+        default_factory=lambda: _diarization_cfg.get("seg_model") or os.getenv("DIARIZATION_SEG_MODEL", "sherpa-onnx-pyannote-segmentation-3-0/model.onnx")
+    )
+    diarization_emb_model: str = Field(
+        default_factory=lambda: _diarization_cfg.get("emb_model") or os.getenv("DIARIZATION_EMB_MODEL", "3dspeaker_speech_eres2net_base_sv_zh-cn_3dspeaker_16k.onnx")
+    )
+    diarization_threshold: float = Field(
+        default_factory=lambda: float(_diarization_cfg.get("threshold", 0.5) if _diarization_cfg.get("threshold") is not None else os.getenv("DIARIZATION_THRESHOLD", "0.5"))
     )
 
 

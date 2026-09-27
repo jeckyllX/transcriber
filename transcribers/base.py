@@ -19,6 +19,7 @@ class Word(BaseModel):
     start: float
     end: float
     probability: float | None = None
+    speaker: str | None = None
 
 
 class Segment(BaseModel):
@@ -28,6 +29,7 @@ class Segment(BaseModel):
     end: float
     text: str
     confidence: float | None = None
+    speaker: str | None = None
     words: list[Word] = Field(default_factory=list)
 
 
@@ -58,15 +60,48 @@ class TranscriptionResult(BaseModel):
             centis -= 100
         return f"{hrs}:{mins:02d}:{secs:02d}.{centis:02d}"
 
+    def get_speaker_turns(self) -> list[dict[str, Any]]:
+        """Group consecutive segments by the same speaker into dialogue turns."""
+        turns: list[dict[str, Any]] = []
+        for seg in self.segments:
+            speaker = seg.speaker or "Speaker 0"
+            if turns and turns[-1]["speaker"] == speaker:
+                turns[-1]["end"] = seg.end
+                turns[-1]["text"] = (turns[-1]["text"] + " " + seg.text.strip()).strip()
+                turns[-1]["segments"].append(seg.model_dump())
+            else:
+                turns.append({
+                    "speaker": speaker,
+                    "start": seg.start,
+                    "end": seg.end,
+                    "text": seg.text.strip(),
+                    "segments": [seg.model_dump()],
+                })
+        return turns
+
     def to_txt(self) -> str:
-        return self.text.strip()
+        has_speakers = any(seg.speaker for seg in self.segments)
+        if not has_speakers:
+            return self.text.strip()
+        lines = []
+        current_speaker = None
+        for seg in self.segments:
+            speaker = seg.speaker or "Speaker 0"
+            if speaker != current_speaker:
+                if lines:
+                    lines.append("")
+                lines.append(f"[{speaker}]:")
+                current_speaker = speaker
+            lines.append(seg.text.strip())
+        return "\n".join(lines).strip()
 
     def to_srt(self) -> str:
         lines = []
         for i, seg in enumerate(self.segments, start=1):
             start_str = self._format_timestamp(seg.start, srt_format=True)
             end_str = self._format_timestamp(seg.end, srt_format=True)
-            lines.append(f"{i}\n{start_str} --> {end_str}\n{seg.text.strip()}\n")
+            text = f"{seg.speaker}: {seg.text.strip()}" if seg.speaker else seg.text.strip()
+            lines.append(f"{i}\n{start_str} --> {end_str}\n{text}\n")
         return "\n".join(lines).strip()
 
     def to_vtt(self) -> str:
@@ -74,7 +109,8 @@ class TranscriptionResult(BaseModel):
         for seg in self.segments:
             start_str = self._format_timestamp(seg.start, srt_format=False)
             end_str = self._format_timestamp(seg.end, srt_format=False)
-            lines.append(f"{start_str} --> {end_str}\n{seg.text.strip()}\n")
+            text = f"<v {seg.speaker}>{seg.text.strip()}</v>" if seg.speaker else seg.text.strip()
+            lines.append(f"{start_str} --> {end_str}\n{text}\n")
         return "\n".join(lines).strip()
 
     def to_word_vtt(self) -> str:
@@ -83,14 +119,16 @@ class TranscriptionResult(BaseModel):
             start_str = self._format_timestamp(seg.start, srt_format=False)
             end_str = self._format_timestamp(seg.end, srt_format=False)
             lines.append(f"{start_str} --> {end_str}")
+            speaker_prefix = f"<v {seg.speaker}>" if seg.speaker else ""
+            speaker_suffix = "</v>" if seg.speaker else ""
             if seg.words:
                 word_cues = []
                 for w in seg.words:
                     w_start = self._format_timestamp(w.start, srt_format=False)
                     word_cues.append(f"<{w_start}>{w.word}")
-                lines.append(" ".join(word_cues) + "\n")
+                lines.append(f"{speaker_prefix}{' '.join(word_cues)}{speaker_suffix}\n")
             else:
-                lines.append(f"{seg.text.strip()}\n")
+                lines.append(f"{speaker_prefix}{seg.text.strip()}{speaker_suffix}\n")
         return "\n".join(lines).strip()
 
     def to_ass(self, title: str = "Transcription") -> str:
@@ -113,15 +151,16 @@ class TranscriptionResult(BaseModel):
         for seg in self.segments:
             start_str = self._format_ass_timestamp(seg.start)
             end_str = self._format_ass_timestamp(seg.end)
+            speaker_name = seg.speaker or ""
             if seg.words:
                 k_parts = []
                 for w in seg.words:
                     duration_cs = max(1, int(round((w.end - w.start) * 100)))
                     k_parts.append(f"{{\\k{duration_cs}}}{w.word}")
                 karaoke_text = " ".join(k_parts)
-                dialogues.append(f"Dialogue: 0,{start_str},{end_str},Karaoke,,0,0,0,,{karaoke_text}")
+                dialogues.append(f"Dialogue: 0,{start_str},{end_str},Karaoke,{speaker_name},0,0,0,,{karaoke_text}")
             else:
-                dialogues.append(f"Dialogue: 0,{start_str},{end_str},Default,,0,0,0,,{seg.text.strip()}")
+                dialogues.append(f"Dialogue: 0,{start_str},{end_str},Default,{speaker_name},0,0,0,,{seg.text.strip()}")
 
         return header + "\n".join(dialogues) + "\n"
 

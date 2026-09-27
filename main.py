@@ -27,6 +27,7 @@ from transcribers import transcriber_factory
 from llm import llm_registry, get_polish_prompt, get_summary_prompt, ChunkedSummarizer
 from notifications import dispatcher, NotificationPayload, TelegramNotifier, WebhookNotifier
 from jobs import job_manager
+from diarization import diarizer_factory, align_speakers_to_segments
 
 logging.basicConfig(
     level=logging.INFO,
@@ -87,6 +88,11 @@ class DispatchNotificationRequest(BaseModel):
     polished_text: str | None = None
 
 
+class RenameSpeakerRequest(BaseModel):
+    old_name: str
+    new_name: str
+
+
 # ------------------------------------------------------------------------------
 # UI Routes
 # ------------------------------------------------------------------------------
@@ -117,6 +123,7 @@ async def get_system_status():
             "binary_path": settings.ffmpeg_bin,
         },
         "whisper_engines": transcriber_factory.list_engines(),
+        "diarization_engines": diarizer_factory.list_engines(),
         "llm_providers": llm_registry.list_providers(),
         "ollama_connection": ollama_status,
         "notification_providers": dispatcher.list_providers(),
@@ -158,6 +165,9 @@ async def create_background_job(
     whisper_model: str = Form(default="base"),
     language: str = Form(default="auto"),
     vad_filter: bool = Form(default=True),
+    enable_diarization: bool = Form(default=True),
+    num_speakers: int = Form(default=-1),
+    cluster_threshold: float = Form(default=0.5),
     ai_action: str = Form(default="summary"),
     summary_level: str = Form(default="bullets"),
     llm_provider: str = Form(default="ollama"),
@@ -184,6 +194,9 @@ async def create_background_job(
             whisper_model=whisper_model,
             language=language,
             vad_filter=vad_filter,
+            enable_diarization=enable_diarization,
+            num_speakers=num_speakers,
+            cluster_threshold=cluster_threshold,
             ai_action=ai_action,
             summary_level=summary_level,
             llm_provider=llm_provider,
@@ -193,6 +206,15 @@ async def create_background_job(
     )
 
     return {"job_id": job.job_id, "status": "queued"}
+
+
+@app.post("/api/jobs/{job_id}/rename-speaker")
+async def rename_job_speaker(job_id: str, req: RenameSpeakerRequest):
+    """Rename a speaker in an existing job and refresh exports and dialogue turns."""
+    result = job_manager.rename_speaker(job_id, req.old_name, req.new_name)
+    if not result:
+        raise HTTPException(status_code=404, detail="Job not found or result not available")
+    return {"status": "ok", "result": result}
 
 
 @app.get("/api/jobs/{job_id}")
@@ -257,6 +279,8 @@ async def transcribe_audio(
     whisper_model: str = Form(default="base"),
     language: str = Form(default="auto"),
     vad_filter: bool = Form(default=True),
+    enable_diarization: bool = Form(default=False),
+    num_speakers: int = Form(default=-1),
 ):
     """Upload audio/video file, decode via in-memory PCM or WAV, and transcribe."""
     task_id = str(uuid.uuid4())[:8]
@@ -287,6 +311,17 @@ async def transcribe_audio(
             vad_filter=vad_filter,
         )
 
+        num_speakers_detected = 0
+        if enable_diarization:
+            try:
+                diarizer = diarizer_factory.get_diarizer("sherpa-onnx")
+                if diarizer.is_available():
+                    diar_res = diarizer.diarize(audio_input, num_speakers=num_speakers)
+                    align_speakers_to_segments(result.segments, diar_res)
+                    num_speakers_detected = diar_res.num_speakers
+            except Exception as d_err:
+                logger.warning("Synchronous diarization error: %s", d_err)
+
         elapsed = round(time.time() - start_time, 2)
         duration = metadata.duration if metadata else result.duration
 
@@ -298,6 +333,8 @@ async def transcribe_audio(
             "engine_used": transcriber.name,
             "model_used": whisper_model,
             "language": result.language,
+            "num_speakers": num_speakers_detected,
+            "speaker_turns": result.get_speaker_turns(),
             "text": result.to_txt(),
             "srt": result.to_srt(),
             "vtt": result.to_vtt(),
