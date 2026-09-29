@@ -14,7 +14,7 @@ import time
 import uuid
 from pathlib import Path
 from typing import Any
-from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
@@ -24,6 +24,7 @@ from pydantic import BaseModel
 from config import BASE_DIR, STATIC_DIR, TEMPLATES_DIR, UPLOADS_DIR, settings
 from audio_processor import AudioProcessor, AudioProcessorError
 from transcribers import transcriber_factory
+from transcribers.streaming import LiveTranscriptionSession
 from llm import llm_registry, get_polish_prompt, get_summary_prompt, ChunkedSummarizer
 from notifications import dispatcher, NotificationPayload, TelegramNotifier, WebhookNotifier
 from jobs import job_manager
@@ -267,6 +268,116 @@ async def stream_job_events(job_id: str):
             job_manager.unsubscribe(job_id, queue)
 
     return StreamingResponse(sse_generator(), media_type="text/event-stream")
+
+
+# ------------------------------------------------------------------------------
+# Real-Time WebSocket Streaming Endpoint
+# ------------------------------------------------------------------------------
+@app.websocket("/api/ws/transcribe")
+async def websocket_transcribe(websocket: WebSocket):
+    """Real-time live streaming audio transcription via WebSocket.
+
+    Accepts binary 16kHz 16-bit mono PCM chunks and optional JSON control messages.
+    Streams live interim 'partial' tokens and finalized 'segment' events.
+    """
+    await websocket.accept()
+
+    session = LiveTranscriptionSession(
+        whisper_engine=getattr(settings, "default_whisper_engine", "faster-whisper"),
+        whisper_model=settings.default_whisper_model,
+        language="auto",
+    )
+
+    is_running = True
+    processing_lock = asyncio.Lock()
+
+    async def process_loop():
+        """Background loop that periodically evaluates buffer and sends recognition events."""
+        while is_running:
+            try:
+                await asyncio.sleep(0.3)
+                if not is_running:
+                    break
+                if session.should_process():
+                    async with processing_lock:
+                        events = await asyncio.to_thread(session.step)
+                    for ev in events:
+                        await websocket.send_json(ev)
+            except asyncio.CancelledError:
+                break
+            except Exception as exc:
+                logger.warning("Streaming processing loop error: %s", exc)
+
+    proc_task = asyncio.create_task(process_loop())
+
+    try:
+        # Send ready event to client
+        await websocket.send_json({
+            "event": "ready",
+            "sample_rate": session.sample_rate,
+            "session_id": session.session_id,
+        })
+
+        while is_running:
+            message = await websocket.receive()
+            if "bytes" in message and message["bytes"]:
+                session.add_chunk(message["bytes"])
+            elif "text" in message and message["text"]:
+                try:
+                    cmd = json.loads(message["text"])
+                    action = cmd.get("action", "")
+                    if action == "start":
+                        if "whisper_engine" in cmd:
+                            session.whisper_engine = cmd["whisper_engine"]
+                        if "whisper_model" in cmd:
+                            session.whisper_model = cmd["whisper_model"]
+                        if "language" in cmd:
+                            session.language = cmd["language"]
+                        if "vad_filter" in cmd:
+                            session.vad_filter = bool(cmd["vad_filter"])
+                        await websocket.send_json({
+                            "event": "configured",
+                            "engine": session.whisper_engine,
+                            "model": session.whisper_model,
+                            "language": session.language,
+                        })
+                    elif action == "stop":
+                        break
+                    elif action == "reset":
+                        session.buffer.clear()
+                        session.segments.clear()
+                        session.current_partial_text = ""
+                        await websocket.send_json({"event": "reset"})
+                except json.JSONDecodeError:
+                    pass
+
+    except WebSocketDisconnect:
+        logger.info("WebSocket client disconnected: %s", session.session_id)
+    except Exception as e:
+        logger.error("WebSocket streaming exception: %s", e)
+        try:
+            await websocket.send_json({"event": "error", "error": str(e)})
+        except Exception:
+            pass
+    finally:
+        is_running = False
+        proc_task.cancel()
+        try:
+            await proc_task
+        except asyncio.CancelledError:
+            pass
+
+        # Finalize remaining audio
+        try:
+            async with processing_lock:
+                final_result = await asyncio.to_thread(session.finish)
+            await websocket.send_json({
+                "event": "completed",
+                "result": final_result.to_dict(),
+            })
+            await websocket.close()
+        except Exception:
+            pass
 
 
 # ------------------------------------------------------------------------------

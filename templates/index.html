@@ -10,7 +10,7 @@
   <script src="https://unpkg.com/lucide@latest"></script>
   <!-- Marked for Markdown rendering -->
   <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
-  <link rel="stylesheet" href="/static/style.css?v=4.0">
+  <link rel="stylesheet" href="/static/style.css?v=5.0">
 </head>
 <body class="h-full flex flex-col font-sans antialiased selection:bg-indigo-500 selection:text-white">
 
@@ -98,14 +98,47 @@
           </div>
 
           <!-- Microphone Recording Panel -->
-          <div id="recorder-panel" class="hidden space-y-4 text-center py-6">
-            <div class="flex flex-col items-center justify-center space-y-4">
+          <div id="recorder-panel" class="hidden space-y-4 text-center py-4">
+            
+            <!-- Live Dictation Mode Toggle -->
+            <div class="flex items-center justify-center space-x-2 py-1.5 px-3.5 bg-slate-950/70 rounded-xl border border-slate-800/80 inline-flex mx-auto shadow-inner">
+              <input type="checkbox" id="live-stream-checkbox" checked class="w-4 h-4 rounded text-indigo-600 bg-slate-950 border-slate-700 focus:ring-indigo-500 cursor-pointer">
+              <label for="live-stream-checkbox" class="text-xs font-medium text-slate-300 cursor-pointer flex items-center gap-1.5">
+                <i data-lucide="radio" class="w-3.5 h-3.5 text-indigo-400"></i>
+                <span>Live Real-Time Streaming</span>
+                <span class="text-[10px] px-1.5 py-0.5 rounded bg-indigo-500/10 text-indigo-400 border border-indigo-500/20 font-mono">WebSocket</span>
+              </label>
+            </div>
+
+            <div class="flex flex-col items-center justify-center space-y-3">
               <button id="record-toggle-btn" class="w-20 h-20 rounded-full bg-red-600 hover:bg-red-500 text-white flex items-center justify-center shadow-lg shadow-red-600/30 transition-transform active:scale-95">
                 <i id="record-icon" data-lucide="mic" class="w-8 h-8"></i>
               </button>
               <div id="record-timer" class="text-2xl font-mono text-slate-200">00:00</div>
-              <p id="record-status" class="text-xs text-slate-400">Click to start recording from your microphone</p>
+              <p id="record-status" class="text-xs text-slate-400">Click to start live streaming dictation</p>
             </div>
+
+            <!-- Live Streaming Real-Time Feed Box -->
+            <div id="live-stream-box" class="hidden text-left p-4 rounded-xl bg-slate-950/80 border border-slate-800 space-y-2.5">
+              <div class="flex items-center justify-between text-xs pb-2 border-b border-slate-800/80 text-slate-400">
+                <div class="flex items-center gap-2">
+                  <span class="w-2 h-2 rounded-full bg-red-500 animate-ping"></span>
+                  <span class="font-medium text-red-400 tracking-wide text-[11px]">LIVE STREAMING</span>
+                </div>
+                <div class="flex items-center gap-1 audio-wave-bars">
+                  <span class="wave-bar"></span>
+                  <span class="wave-bar"></span>
+                  <span class="wave-bar"></span>
+                  <span class="wave-bar"></span>
+                </div>
+              </div>
+              <div id="live-transcript-feed" class="text-sm text-slate-200 max-h-36 overflow-y-auto leading-relaxed custom-scrollbar min-h-[50px] p-1">
+                <span id="live-final-text"></span>
+                <span id="live-interim-text" class="text-indigo-400 font-medium italic"></span>
+                <span id="live-cursor" class="inline-block w-1.5 h-4 bg-indigo-400 ml-0.5 animate-pulse align-middle"></span>
+              </div>
+            </div>
+
             <!-- Audio preview player -->
             <audio id="record-preview" controls class="hidden w-full mt-4"></audio>
           </div>
@@ -418,7 +451,7 @@
     </div>
   </div>
 
-  <script src="/static/app.js?v=4.0"></script>
+  <script src="/static/app.js?v=5.0"></script>
   <script>
     lucide.createIcons();
   </script>

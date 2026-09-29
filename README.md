@@ -21,6 +21,10 @@ A modular audio transcription and AI analysis platform. Accepts audio/video medi
   - 100% CPU inference with zero PyTorch or GPU requirements.
   - On-demand model provisioning: models are fetched automatically only when diarization is first requested.
   - Interactive inline speaker renaming that updates exports and dialogue turns in real time.
+- **Live Real-Time Dictation (WebSockets)**:
+  - Low-latency live microphone streaming over WebSockets (`/api/ws/transcribe`).
+  - Sliding-window decoding with energy VAD and silence pause detection running asynchronously in background worker threads.
+  - Interactive live UI displaying interim words in real time with visual audio equalizer waves and automatic handoff to full results export and AI processing.
 - **Word-Level Precision & Karaoke Playback**:
   - Precise word-level timestamps with speech recognition confidence scores.
   - Real-time karaoke-style word highlighting synchronized with audio playback.
@@ -36,7 +40,7 @@ A modular audio transcription and AI analysis platform. Accepts audio/video medi
   - Open for extension: Add Slack, Email, or Discord providers without modifying core transcription code.
 - **Modern Responsive Dashboard**:
   - Drag-and-drop file upload with format inspection.
-  - In-browser microphone audio recorder.
+  - In-browser microphone audio recorder with live WebSocket dictation.
   - Audio player with interactive timestamp seeking and word karaoke highlighting.
   - Clean dark theme built with Tailwind CSS and Lucide icons.
   - Zero Node/NPM dependencies needed to run.
@@ -128,6 +132,7 @@ transcriber/
 │   ├── base.py                # BaseTranscriber, TranscriptionResult (TXT, SRT, VTT, ASS, JSON)
 │   ├── faster_whisper.py      # CTranslate2 Python engine
 │   ├── whisper_cpp.py         # Standalone C++ binary adapter
+│   ├── streaming.py           # Real-time WebSocket audio ring buffer & live session
 │   └── factory.py             # Dynamic transcriber resolution
 ├── llm/                       # Modular AI / LLM Subsystem
 │   ├── base.py                # BaseLLMProvider interface
@@ -138,9 +143,9 @@ transcriber/
 ├── templates/
 │   └── index.html             # Modern responsive web dashboard
 ├── static/
-│   ├── app.js                 # UI controller, mic recording, SSE streams, speaker editing
+│   ├── app.js                 # UI controller, mic recording, SSE streams, live dictation
 │   └── style.css              # Custom styling & animations
-└── tests/                     # 29 automated tests covering all subsystems
+└── tests/                     # 35 automated tests covering all subsystems
 ```
 
 ---

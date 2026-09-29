@@ -75,6 +75,13 @@ document.addEventListener("DOMContentLoaded", () => {
   const pullModelStatus = document.getElementById("pull-model-status");
   const ollamaStatusBadge = document.getElementById("ollama-status-badge");
 
+  const liveStreamCheckbox = document.getElementById("live-stream-checkbox");
+  const liveStreamBox = document.getElementById("live-stream-box");
+  const liveTranscriptFeed = document.getElementById("live-transcript-feed");
+  const liveFinalText = document.getElementById("live-final-text");
+  const liveInterimText = document.getElementById("live-interim-text");
+  const liveCursor = document.getElementById("live-cursor");
+
   // State
   let selectedFile = null;
   let recordedBlob = null;
@@ -83,6 +90,11 @@ document.addEventListener("DOMContentLoaded", () => {
   let recordChunks = [];
   let recordTimerInterval = null;
   let recordSeconds = 0;
+
+  let liveWs = null;
+  let liveAudioCtx = null;
+  let liveScriptNode = null;
+  let liveMicStream = null;
 
   let activeAiAction = "summary"; // 'raw', 'polish', 'summary'
   let activeSummaryLevel = "bullets"; // 'tldr', 'bullets', 'detailed', 'action_items', 'custom'
@@ -255,11 +267,123 @@ document.addEventListener("DOMContentLoaded", () => {
     audioPreview.classList.add("hidden");
   });
 
-  // Microphone recording
+  // Helper to downsample Float32 audio buffer to 16kHz 16-bit PCM little-endian
+  function downsampleBuffer(buffer, inputSampleRate, outputSampleRate = 16000) {
+    if (inputSampleRate === outputSampleRate) {
+      const pcm16 = new Int16Array(buffer.length);
+      for (let i = 0; i < buffer.length; i++) {
+        const s = Math.max(-1, Math.min(1, buffer[i]));
+        pcm16[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
+      }
+      return pcm16.buffer;
+    }
+    const sampleRateRatio = inputSampleRate / outputSampleRate;
+    const newLength = Math.round(buffer.length / sampleRateRatio);
+    const result = new Int16Array(newLength);
+    let offsetResult = 0;
+    let offsetBuffer = 0;
+    while (offsetResult < result.length) {
+      const nextOffsetBuffer = Math.round((offsetResult + 1) * sampleRateRatio);
+      let accum = 0;
+      let count = 0;
+      for (let i = offsetBuffer; i < nextOffsetBuffer && i < buffer.length; i++) {
+        accum += buffer[i];
+        count++;
+      }
+      const val = count > 0 ? accum / count : 0;
+      const s = Math.max(-1, Math.min(1, val));
+      result[offsetResult] = s < 0 ? s * 0x8000 : s * 0x7FFF;
+      offsetResult++;
+      offsetBuffer = nextOffsetBuffer;
+    }
+    return result.buffer;
+  }
+
+  // Trigger AI Polish or Summary on live streamed transcript
+  async function triggerStreamingAiProcessing(text, action, detailLevel) {
+    if (!text || !text.trim()) return;
+    const provider = llmProviderSelect.value;
+    const model = llmModelSelect.value;
+
+    if (action === "polish") {
+      switchResultTab("polish");
+      polishContent.textContent = "AI polishing in progress...";
+    } else if (action === "summary") {
+      switchResultTab("summary");
+      summaryContent.innerHTML = `<p class="text-indigo-400 animate-pulse">Generating AI summary (${detailLevel})...</p>`;
+    }
+
+    try {
+      const resp = await fetch("/api/process-llm", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          text: text,
+          action: action,
+          detail_level: detailLevel,
+          provider: provider,
+          model: model,
+        }),
+      });
+
+      if (!resp.ok) {
+        throw new Error(`LLM processing request failed (${resp.status})`);
+      }
+
+      const reader = resp.body.getReader();
+      const decoder = new TextDecoder();
+      let accumulated = "";
+
+      if (action === "polish") {
+        polishContent.textContent = "";
+      }
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        const chunk = decoder.decode(value, { stream: true });
+        const lines = chunk.split("\n");
+        for (const line of lines) {
+          if (line.startsWith("data: ")) {
+            const dataStr = line.slice(6);
+            if (dataStr === "[DONE]") break;
+            try {
+              const parsed = JSON.parse(dataStr);
+              if (parsed.token) {
+                accumulated += parsed.token;
+                if (action === "polish") {
+                  polishContent.textContent = accumulated;
+                } else if (action === "summary") {
+                  summaryContent.innerHTML = typeof marked !== "undefined" ? marked.parse(accumulated) : accumulated;
+                }
+              }
+            } catch (err) {}
+          }
+        }
+      }
+
+      if (action === "polish") {
+        currentResult.polished = accumulated;
+      } else if (action === "summary") {
+        currentResult.summary = accumulated;
+      }
+
+    } catch (e) {
+      console.warn("Live stream AI processing error:", e);
+      if (action === "polish") {
+        polishContent.innerHTML = renderAiUnavailableNotice("Polish", e.message);
+      } else if (action === "summary") {
+        summaryContent.innerHTML = renderAiUnavailableNotice("Summary", e.message);
+      }
+    }
+  }
+
+  // Microphone recording & Live WebSocket Streaming
   recordToggleBtn.addEventListener("click", async () => {
     if (!isRecording) {
       try {
         const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        liveMicStream = stream;
         mediaRecorder = new MediaRecorder(stream);
         recordChunks = [];
 
@@ -267,19 +391,98 @@ document.addEventListener("DOMContentLoaded", () => {
           if (e.data.size > 0) recordChunks.push(e.data);
         };
 
+        const isLive = liveStreamCheckbox && liveStreamCheckbox.checked;
+
         mediaRecorder.onstop = () => {
           recordedBlob = new Blob(recordChunks, { type: "audio/webm" });
           selectedFile = new File([recordedBlob], "mic_recording.webm", { type: "audio/webm" });
-          recordPreview.src = URL.createObjectURL(recordedBlob);
+          const audioUrl = URL.createObjectURL(recordedBlob);
+          recordPreview.src = audioUrl;
           recordPreview.classList.remove("hidden");
-          recordStatus.textContent = "Recording saved! Ready to transcribe.";
+          audioPreview.src = audioUrl;
+          recordStatus.textContent = isLive ? "Live dictation complete! Results loaded below." : "Recording saved! Ready to transcribe.";
         };
 
-        mediaRecorder.start();
+        mediaRecorder.start(100);
+
+        if (isLive) {
+          if (liveFinalText) liveFinalText.textContent = "";
+          if (liveInterimText) liveInterimText.textContent = "";
+          if (liveStreamBox) liveStreamBox.classList.remove("hidden");
+          recordStatus.textContent = "Live streaming dictation active... Speak into your mic.";
+
+          const proto = location.protocol === "https:" ? "wss:" : "ws:";
+          const wsUrl = `${proto}//${location.host}/api/ws/transcribe`;
+          liveWs = new WebSocket(wsUrl);
+          liveWs.binaryType = "arraybuffer";
+
+          liveWs.onopen = () => {
+            liveWs.send(JSON.stringify({
+              action: "start",
+              whisper_engine: whisperEngineSelect.value,
+              whisper_model: whisperModelSelect.value,
+              language: languageSelect.value,
+              vad_filter: vadCheckbox.checked,
+            }));
+          };
+
+          liveWs.onmessage = (e) => {
+            try {
+              const data = JSON.parse(e.data);
+              if (data.event === "partial") {
+                if (liveInterimText) liveInterimText.textContent = " " + data.text;
+                if (liveTranscriptFeed) liveTranscriptFeed.scrollTop = liveTranscriptFeed.scrollHeight;
+              } else if (data.event === "segment") {
+                if (liveFinalText) {
+                  liveFinalText.textContent += (liveFinalText.textContent ? " " : "") + data.text;
+                }
+                if (liveInterimText) liveInterimText.textContent = "";
+                if (liveTranscriptFeed) liveTranscriptFeed.scrollTop = liveTranscriptFeed.scrollHeight;
+              } else if (data.event === "completed") {
+                if (data.result) {
+                  currentResult = Object.assign(currentResult, data.result);
+                  resultsContainer.classList.remove("hidden");
+                  renderSpeakerDialogue(currentResult);
+                  const spkCountStr = currentResult.num_speakers ? ` • ${currentResult.num_speakers} Speakers` : "";
+                  transcriptionStats.textContent = `Duration: ${currentResult.duration.toFixed(1)}s • Live Streaming • Language: ${(currentResult.language || "auto").toUpperCase()}${spkCountStr}`;
+                  transcriptPlainText.textContent = currentResult.text;
+
+                  // Trigger AI post-processing if requested
+                  if (activeAiAction === "polish" || activeAiAction === "summary") {
+                    triggerStreamingAiProcessing(currentResult.text, activeAiAction, activeSummaryLevel);
+                  }
+                }
+              }
+            } catch (err) {
+              console.warn("WebSocket parse error:", err);
+            }
+          };
+
+          liveWs.onerror = (err) => {
+            console.error("Live WebSocket error:", err);
+            recordStatus.textContent = "Live streaming connection error.";
+          };
+
+          // Setup AudioContext for 16kHz PCM streaming
+          liveAudioCtx = new (window.AudioContext || window.webkitAudioContext)();
+          const source = liveAudioCtx.createMediaStreamSource(stream);
+          liveScriptNode = liveAudioCtx.createScriptProcessor(4096, 1, 1);
+          liveScriptNode.onaudioprocess = (e) => {
+            if (liveWs && liveWs.readyState === WebSocket.OPEN) {
+              const channelData = e.inputBuffer.getChannelData(0);
+              const pcmData = downsampleBuffer(channelData, liveAudioCtx.sampleRate, 16000);
+              liveWs.send(pcmData);
+            }
+          };
+          source.connect(liveScriptNode);
+          liveScriptNode.connect(liveAudioCtx.destination);
+        } else {
+          if (liveStreamBox) liveStreamBox.classList.add("hidden");
+          recordStatus.textContent = "Recording in progress... Click to stop.";
+        }
+
         isRecording = true;
         recordToggleBtn.classList.add("recording-active");
-        recordStatus.textContent = "Recording in progress... Click to stop.";
-        
         recordSeconds = 0;
         recordTimer.textContent = "00:00";
         recordTimerInterval = setInterval(() => {
@@ -293,10 +496,32 @@ document.addEventListener("DOMContentLoaded", () => {
         alert("Microphone access denied or not available: " + err.message);
       }
     } else {
-      mediaRecorder.stop();
       isRecording = false;
       recordToggleBtn.classList.remove("recording-active");
       clearInterval(recordTimerInterval);
+
+      if (mediaRecorder && mediaRecorder.state !== "inactive") {
+        mediaRecorder.stop();
+      }
+
+      if (liveScriptNode) {
+        try { liveScriptNode.disconnect(); } catch (e) {}
+        liveScriptNode = null;
+      }
+      if (liveAudioCtx) {
+        try { liveAudioCtx.close(); } catch (e) {}
+        liveAudioCtx = null;
+      }
+      if (liveMicStream) {
+        liveMicStream.getTracks().forEach((track) => track.stop());
+        liveMicStream = null;
+      }
+
+      if (liveWs) {
+        if (liveWs.readyState === WebSocket.OPEN) {
+          liveWs.send(JSON.stringify({ action: "stop" }));
+        }
+      }
     }
   });
 

@@ -167,6 +167,15 @@ class TranscriptionResult(BaseModel):
     def to_json(self) -> str:
         return self.model_dump_json(indent=2)
 
+    def to_dict(self) -> dict[str, Any]:
+        """Convert transcription result to dictionary including formatted subtitle strings."""
+        data = self.model_dump()
+        data["srt"] = self.to_srt()
+        data["vtt"] = self.to_vtt()
+        data["ass"] = self.to_ass()
+        data["speaker_turns"] = self.get_speaker_turns()
+        return data
+
 
 class BaseTranscriber(ABC):
     """Abstract base class for all transcriber implementations."""
