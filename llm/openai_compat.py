@@ -88,15 +88,47 @@ class OpenAICompatibleLLMProvider(BaseLLMProvider):
                 resp = await client.get(url, headers=headers)
                 if resp.status_code == 200:
                     data = resp.json()
-                    models = [m.get("id") for m in data.get("data", []) if m.get("id")]
-                    if models:
-                        # If curated models exist, sort curated ones to top
-                        if self.curated_models:
-                            curated_set = set(self.curated_models)
-                            top = [m for m in self.curated_models if m in models]
-                            rest = [m for m in models if m not in curated_set]
+                    raw_ids = [m.get("id") for m in data.get("data", []) if m.get("id")]
+                    if raw_ids:
+                        exclude_keywords = (
+                            "embedding",
+                            "tts",
+                            "image",
+                            "veo",
+                            "lyria",
+                            "robotics",
+                            "aqa",
+                            "clip",
+                            "live-translate",
+                            "transcribe",
+                            "computer-use",
+                            "customtools",
+                        )
+                        normalized: list[str] = []
+                        for mid in raw_ids:
+                            clean_id = mid.replace("models/", "")
+                            if any(kw in clean_id.lower() for kw in exclude_keywords):
+                                continue
+                            normalized.append(clean_id)
+
+                        if normalized:
+                            flagships = [
+                                "gemini-3.8-flash",
+                                "gemini-flash-latest",
+                                "gemini-3.7-flash",
+                                "gemini-pro-latest",
+                                "gemma-4-31b-it",
+                            ]
+                            combined_priority = self.curated_models + flagships
+                            seen: set[str] = set()
+                            top: list[str] = []
+                            for m in combined_priority:
+                                if m in normalized and m not in seen:
+                                    seen.add(m)
+                                    top.append(m)
+                            rest = [m for m in normalized if m not in seen]
                             return top + rest
-                        return models
+                        return [mid.replace("models/", "") for mid in raw_ids]
                 return default_fallback
         except Exception as e:
             logger.debug("Failed to query models from %s: %s", url, e)
