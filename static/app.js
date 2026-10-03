@@ -75,6 +75,19 @@ document.addEventListener("DOMContentLoaded", () => {
   const pullModelStatus = document.getElementById("pull-model-status");
   const ollamaStatusBadge = document.getElementById("ollama-status-badge");
 
+  const testGroqBtn = document.getElementById("test-groq-btn");
+  const groqApiKeyInput = document.getElementById("groq-api-key-input");
+  const groqTestResult = document.getElementById("groq-test-result");
+  const testOpenrouterBtn = document.getElementById("test-openrouter-btn");
+  const openrouterApiKeyInput = document.getElementById("openrouter-api-key-input");
+  const openrouterTestResult = document.getElementById("openrouter-test-result");
+  const testOpenaiBtn = document.getElementById("test-openai-btn");
+  const openaiBaseUrlInput = document.getElementById("openai-base-url-input");
+  const openaiApiKeyInput = document.getElementById("openai-api-key-input");
+  const openaiTestResult = document.getElementById("openai-test-result");
+  const saveSettingsBtn = document.getElementById("save-settings-btn");
+  const settingsSaveFeedback = document.getElementById("settings-save-feedback");
+
   const liveStreamCheckbox = document.getElementById("live-stream-checkbox");
   const liveStreamBox = document.getElementById("live-stream-box");
   const liveTranscriptFeed = document.getElementById("live-transcript-feed");
@@ -199,6 +212,38 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   }
 
+  async function updateWhisperModels() {
+    const engine = whisperEngineSelect.value;
+    try {
+      const res = await fetch(`/api/whisper/models?engine=${engine}`);
+      if (res.ok) {
+        const data = await res.json();
+        if (data.models && data.models.length > 0) {
+          whisperModelSelect.innerHTML = "";
+          data.models.forEach((m) => {
+            const opt = document.createElement("option");
+            opt.value = m;
+            let label = m;
+            if (m === "base") label = "Base (Recommended)";
+            else if (m === "tiny") label = "Tiny (Fastest)";
+            else if (m === "small") label = "Small (More Accurate)";
+            else if (m === "medium") label = "Medium (High Precision)";
+            else if (m === "whisper-large-v3-turbo") label = "Whisper Large v3 Turbo (Recommended)";
+            else if (m === "whisper-large-v3") label = "Whisper Large v3";
+            else if (m === "distil-whisper-large-v3-en") label = "Distil-Whisper Large v3 (English)";
+            else if (m === "openai/whisper-large-v3") label = "OpenAI Whisper Large v3 (Default)";
+            else if (m === "openai/whisper-large-v3-turbo") label = "OpenAI Whisper Large v3 Turbo";
+            opt.textContent = label;
+            whisperModelSelect.appendChild(opt);
+          });
+        }
+      }
+    } catch (e) {
+      console.warn("Failed to fetch whisper models:", e);
+    }
+  }
+
+  whisperEngineSelect.addEventListener("change", updateWhisperModels);
   llmProviderSelect.addEventListener("change", loadLlmModels);
   refreshModelsBtn.addEventListener("click", loadLlmModels);
 
@@ -1033,8 +1078,123 @@ document.addEventListener("DOMContentLoaded", () => {
   setupAudioWordSync(recordPreview);
 
   // Settings Modal Handlers
-  openSettingsBtn.addEventListener("click", () => settingsModal.classList.remove("hidden"));
+  async function loadSettings() {
+    try {
+      const res = await fetch("/api/settings");
+      if (res.ok) {
+        const data = await res.json();
+        if (groqApiKeyInput && data.groq?.api_key) groqApiKeyInput.value = data.groq.api_key;
+        if (openrouterApiKeyInput && data.openrouter?.api_key) openrouterApiKeyInput.value = data.openrouter.api_key;
+        if (openaiBaseUrlInput && data.openai_compatible?.base_url) openaiBaseUrlInput.value = data.openai_compatible.base_url;
+        if (openaiApiKeyInput && data.openai_compatible?.api_key) openaiApiKeyInput.value = data.openai_compatible.api_key;
+        if (telegramTokenInput && data.notifications?.telegram?.bot_token) telegramTokenInput.value = data.notifications.telegram.bot_token;
+        if (telegramChatIdInput && data.notifications?.telegram?.chat_id) telegramChatIdInput.value = data.notifications.telegram.chat_id;
+      }
+    } catch (e) {
+      console.warn("Failed to load settings:", e);
+    }
+  }
+
+  openSettingsBtn.addEventListener("click", () => {
+    loadSettings();
+    settingsModal.classList.remove("hidden");
+  });
   closeSettingsBtn.addEventListener("click", () => settingsModal.classList.add("hidden"));
+
+  async function testProviderConnection(provider, apiKey, baseUrl, resultEl) {
+    if (!resultEl) return;
+    resultEl.innerHTML = `<span class="text-indigo-400">Testing connection...</span>`;
+    try {
+      const res = await fetch("/api/settings/test", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          provider: provider,
+          api_key: apiKey,
+          base_url: baseUrl,
+        }),
+      });
+      const data = await res.json();
+      if (data.online) {
+        const lat = data.latency_ms ? ` (${data.latency_ms} ms)` : "";
+        resultEl.innerHTML = `<span class="text-emerald-400">✅ Connected successfully!${lat}</span>`;
+      } else {
+        resultEl.innerHTML = `<span class="text-red-400">❌ Connection failed: ${data.error || "Unknown error"}</span>`;
+      }
+    } catch (e) {
+      resultEl.innerHTML = `<span class="text-red-400">❌ Request failed: ${e.message}</span>`;
+    }
+  }
+
+  if (testGroqBtn) {
+    testGroqBtn.addEventListener("click", () => {
+      testProviderConnection("groq", groqApiKeyInput.value.trim(), null, groqTestResult);
+    });
+  }
+
+  if (testOpenrouterBtn) {
+    testOpenrouterBtn.addEventListener("click", () => {
+      testProviderConnection("openrouter", openrouterApiKeyInput.value.trim(), null, openrouterTestResult);
+    });
+  }
+
+  if (testOpenaiBtn) {
+    testOpenaiBtn.addEventListener("click", () => {
+      testProviderConnection("openai_compat", openaiApiKeyInput.value.trim(), openaiBaseUrlInput.value.trim(), openaiTestResult);
+    });
+  }
+
+  if (saveSettingsBtn) {
+    saveSettingsBtn.addEventListener("click", async () => {
+      saveSettingsBtn.disabled = true;
+      if (settingsSaveFeedback) {
+        settingsSaveFeedback.innerHTML = `<span class="text-indigo-400">Saving configuration...</span>`;
+      }
+      const payload = {
+        groq: { api_key: groqApiKeyInput.value.trim() },
+        openrouter: { api_key: openrouterApiKeyInput.value.trim() },
+        openai_compatible: {
+          base_url: openaiBaseUrlInput.value.trim(),
+          api_key: openaiApiKeyInput.value.trim(),
+        },
+        notifications: {
+          telegram: {
+            bot_token: telegramTokenInput.value.trim(),
+            chat_id: telegramChatIdInput.value.trim(),
+          },
+        },
+      };
+      try {
+        const res = await fetch("/api/settings", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        });
+        if (res.ok) {
+          if (settingsSaveFeedback) {
+            settingsSaveFeedback.innerHTML = `<span class="text-emerald-400 font-medium">✅ Settings saved!</span>`;
+          }
+          await checkSystemStatus();
+          await loadLlmModels();
+          await updateWhisperModels();
+          setTimeout(() => {
+            if (settingsSaveFeedback) settingsSaveFeedback.textContent = "";
+          }, 3500);
+        } else {
+          const err = await res.json();
+          if (settingsSaveFeedback) {
+            settingsSaveFeedback.innerHTML = `<span class="text-red-400">❌ Failed: ${err.detail || "Error"}</span>`;
+          }
+        }
+      } catch (e) {
+        if (settingsSaveFeedback) {
+          settingsSaveFeedback.innerHTML = `<span class="text-red-400">❌ Error: ${e.message}</span>`;
+        }
+      } finally {
+        saveSettingsBtn.disabled = false;
+      }
+    });
+  }
 
   testTelegramBtn.addEventListener("click", async () => {
     telegramTestResult.textContent = "Testing connection...";
@@ -1215,4 +1375,5 @@ document.addEventListener("DOMContentLoaded", () => {
   }
 
   checkSystemStatus();
+  updateWhisperModels();
 });

@@ -27,6 +27,18 @@
     "base_url": "https://api.openai.com/v1",
     "default_model": "gpt-4o-mini"
   },
+  "groq": {
+    "api_key": null,
+    "base_url": "https://api.groq.com/openai/v1",
+    "default_model": "llama-3.3-70b-versatile",
+    "default_stt_model": "whisper-large-v3-turbo"
+  },
+  "openrouter": {
+    "api_key": null,
+    "base_url": "https://openrouter.ai/api/v1",
+    "default_model": "meta-llama/llama-3.3-70b-instruct",
+    "default_stt_model": "openai/whisper-large-v3"
+  },
   "notifications": {
     "telegram": {
       "enabled": false,

@@ -20,8 +20,9 @@ from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel
+import httpx
 
-from config import BASE_DIR, STATIC_DIR, TEMPLATES_DIR, UPLOADS_DIR, settings
+from config import BASE_DIR, STATIC_DIR, TEMPLATES_DIR, UPLOADS_DIR, settings, save_config, get_masked_settings
 from audio_processor import AudioProcessor, AudioProcessorError
 from transcribers import transcriber_factory
 from transcribers.streaming import LiveTranscriptionSession
@@ -65,6 +66,12 @@ class LLMProcessRequest(BaseModel):
     custom_instruction: str | None = None
     provider: str = "ollama"
     model: str | None = None
+
+
+class SettingsTestRequest(BaseModel):
+    provider: str
+    api_key: str | None = None
+    base_url: str | None = None
 
 
 class NotificationTestRequest(BaseModel):
@@ -154,6 +161,94 @@ async def pull_ollama_model(model_name: str = Form(...)):
         yield "data: [DONE]\n\n"
 
     return StreamingResponse(event_generator(), media_type="text/event-stream")
+
+
+@app.get("/api/whisper/models")
+async def get_whisper_models(engine: str = "faster-whisper"):
+    """Return supported models for the requested Whisper engine."""
+    models = transcriber_factory.get_models_for_engine(engine)
+    return {"engine": engine, "models": models}
+
+
+@app.get("/api/settings")
+async def get_settings_endpoint():
+    """Retrieve runtime settings with sensitive credentials masked."""
+    return get_masked_settings()
+
+
+@app.post("/api/settings")
+async def update_settings_endpoint(updates: dict[str, Any]):
+    """Update settings and persist to config.json."""
+    try:
+        updated = save_config(updates)
+        return {"status": "ok", "settings": updated}
+    except Exception as e:
+        logger.error("Failed to save settings: %s", e)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/settings/test")
+async def test_provider_settings_endpoint(req: SettingsTestRequest):
+    """Test connection and latency to local or cloud AI providers."""
+    prov_id = req.provider
+
+    if prov_id == "ollama":
+        prov = llm_registry.get_provider("ollama")
+        return await prov.test_connection()
+
+    elif prov_id in ("groq", "openrouter", "openai", "openai_compat"):
+        api_key = req.api_key
+        if not api_key or "••••" in api_key:
+            if prov_id == "groq":
+                api_key = settings.groq_api_key
+            elif prov_id == "openrouter":
+                api_key = settings.openrouter_api_key
+            elif prov_id == "openai":
+                api_key = settings.openai_api_key
+            elif prov_id == "openai_compat":
+                api_key = settings.openai_api_key
+
+        base_url = req.base_url
+        if not base_url:
+            if prov_id == "groq":
+                base_url = settings.groq_base_url
+            elif prov_id == "openrouter":
+                base_url = settings.openrouter_base_url
+            elif prov_id == "openai":
+                base_url = settings.openai_base_url
+            elif prov_id == "openai_compat":
+                base_url = settings.openai_base_url
+
+        if not api_key:
+            return {"online": False, "error": f"{prov_id.capitalize()} API Key is missing or not configured."}
+
+        extra_headers = {}
+        if prov_id == "openrouter":
+            extra_headers = {
+                "HTTP-Referer": "https://github.com/jekyll86/transcriber",
+                "X-Title": "Transcriber",
+            }
+
+        start_time = time.time()
+        try:
+            async with httpx.AsyncClient(timeout=8.0) as client:
+                resp = await client.get(
+                    f"{base_url.rstrip('/')}/models",
+                    headers={"Authorization": f"Bearer {api_key}", **extra_headers},
+                )
+                latency_ms = round((time.time() - start_time) * 1000, 1)
+                return {
+                    "online": resp.status_code == 200,
+                    "status_code": resp.status_code,
+                    "latency_ms": latency_ms,
+                    "base_url": base_url,
+                    "error": None if resp.status_code == 200 else f"HTTP {resp.status_code}: {resp.text[:120]}",
+                }
+        except Exception as err:
+            return {"online": False, "base_url": base_url, "error": str(err)}
+
+    else:
+        raise HTTPException(status_code=400, detail=f"Unsupported test provider: {prov_id}")
 
 
 # ------------------------------------------------------------------------------

@@ -29,11 +29,11 @@ A modular audio transcription and AI analysis platform. Accepts audio/video medi
   - Precise word-level timestamps with speech recognition confidence scores.
   - Real-time karaoke-style word highlighting synchronized with audio playback.
   - Click-to-seek navigation: clicking any word or timestamp instantly seeks the audio player to that exact moment.
-- **Extensible AI Intelligence (Ollama & Beyond)**:
-  - **Transcript Polish**: Removes filler words ("um", "uh"), stutters, and phonetic speech-to-text anomalies while preserving exact meaning and speaker headers.
-  - **Multi-Level Summarization**: Select between *Brief TL;DR*, *Key Takeaways (Bullets)*, *Detailed Structured Report*, *Action Items Checklist*, or a *Custom Prompt*.
-  - **Dynamic Model Manager**: Live queries installed Ollama models and provides in-browser model pulling with progress streaming.
-  - **OpenAI-Compatible Extensibility**: Easily switch to OpenAI, Groq, DeepSeek, Mistral AI, or self-hosted vLLM.
+- **Extensible AI Intelligence (Ollama, Groq, OpenRouter & Beyond)**:
+  - **Cloud STT Acceleration**: Near-instant transcription using Groq Cloud Whisper (`whisper-large-v3-turbo`, `distil-whisper`) or OpenRouter, with automatic audio compression and chunking for files exceeding the 25MB API limit.
+  - **Transcript Polish & Summarization**: Choose between local Ollama models or ultra-fast cloud LLMs (Groq Llama 3.3 70B, OpenRouter Claude/DeepSeek-R1, custom vLLM).
+  - **Universal Profile-Driven Adapters**: Zero vendor-specific subclasses. Both STT and LLM integrations adhere to standard OpenAI REST specifications and can be plugged declaratively via `config.json` or the Settings UI.
+  - **Interactive Settings & Connection Testing**: In-browser latency benchmarking and connection verification with masked credential security.
 - **Modular Notification Dispatcher (Strategy Pattern)**:
   - **Telegram Bot**: Sends rich HTML notifications with execution stats, formatted summaries, and full transcript documents (`.txt` / `.md`).
   - **Generic Webhook**: Dispatches standard JSON POST payloads to automation workflows (n8n, Make, Zapier, Discord, Slack).
@@ -78,7 +78,10 @@ cp config.json.example config.json
 | `HOST` | `0.0.0.0` | Server bind address |
 | `PORT` | `8000` | Server HTTP port |
 | `DEFAULT_WHISPER_MODEL`| `base` | Default Whisper model (`tiny`, `base`, `small`, `medium`) |
-| `OLLAMA_BASE_URL` | `http://127.0.0.1:11434` | Ollama API endpoint |
+| `GROQ_API_KEY` | | Groq Cloud API Key for ultra-fast Whisper & Llama 3.3 |
+| `OPENROUTER_API_KEY` | | OpenRouter API Key for cloud Whisper, Claude, DeepSeek |
+| `OPENAI_API_KEY` | | OpenAI / Custom OpenAI-compatible API Key |
+| `OLLAMA_BASE_URL` | `http://127.0.0.1:11434` | Local Ollama API endpoint |
 | `DEFAULT_OLLAMA_MODEL` | `llama3.2` | Default model for polishing & summaries |
 | `TELEGRAM_ENABLED` | `false` | Enable Telegram notification dispatch |
 | `TELEGRAM_BOT_TOKEN` | | Telegram Bot Token from `@BotFather` |
@@ -132,12 +135,13 @@ transcriber/
 │   ├── base.py                # BaseTranscriber, TranscriptionResult (TXT, SRT, VTT, ASS, JSON)
 │   ├── faster_whisper.py      # CTranslate2 Python engine
 │   ├── whisper_cpp.py         # Standalone C++ binary adapter
+│   ├── openai_compat.py       # Universal cloud STT adapter (Groq, OpenRouter, OpenAI, vLLM)
 │   ├── streaming.py           # Real-time WebSocket audio ring buffer & live session
 │   └── factory.py             # Dynamic transcriber resolution
 ├── llm/                       # Modular AI / LLM Subsystem
 │   ├── base.py                # BaseLLMProvider interface
 │   ├── ollama.py              # Ollama client with token streaming & model pulling
-│   ├── openai_compat.py       # OpenAI-compatible client (/v1/chat/completions)
+│   ├── openai_compat.py       # Universal OpenAI-compatible client (Groq, OpenRouter, vLLM)
 │   ├── prompts.py             # Decoupled prompts (Polish + 5 summary tiers with speaker headers)
 │   └── registry.py            # LLM provider registry
 ├── templates/
@@ -145,7 +149,7 @@ transcriber/
 ├── static/
 │   ├── app.js                 # UI controller, mic recording, SSE streams, live dictation
 │   └── style.css              # Custom styling & animations
-└── tests/                     # 35 automated tests covering all subsystems
+└── tests/                     # 48 automated tests covering all subsystems
 ```
 
 ---
