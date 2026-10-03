@@ -39,7 +39,7 @@ class LLMRegistry:
                 base_url_getter=lambda: settings.openrouter_base_url,
                 default_model_getter=lambda: settings.openrouter_default_model,
                 extra_headers={
-                    "HTTP-Referer": "https://github.com/jekyll86/transcriber",
+                    "HTTP-Referer": "https://github.com/jeckyllX/transcriber",
                     "X-Title": "Transcriber",
                 },
                 curated_models=[

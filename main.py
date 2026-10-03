@@ -225,7 +225,7 @@ async def test_provider_settings_endpoint(req: SettingsTestRequest):
         extra_headers = {}
         if prov_id == "openrouter":
             extra_headers = {
-                "HTTP-Referer": "https://github.com/jekyll86/transcriber",
+                "HTTP-Referer": "https://github.com/jeckyllX/transcriber",
                 "X-Title": "Transcriber",
             }
 
