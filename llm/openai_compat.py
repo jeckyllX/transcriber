@@ -104,6 +104,10 @@ class OpenAICompatibleLLMProvider(BaseLLMProvider):
                             "transcribe",
                             "computer-use",
                             "customtools",
+                            "gemini-2.5-flash",
+                            "gemini-2.5-pro",
+                            "gemini-2.0",
+                            "gemini-1.5",
                         )
                         normalized: list[str] = []
                         for mid in raw_ids:
@@ -148,6 +152,17 @@ class OpenAICompatibleLLMProvider(BaseLLMProvider):
 
         url = f"{self.get_base_url()}/chat/completions"
         model_name = model or self.get_default_model()
+
+        # Transparently remap deprecated Google Gemini model names to the active 3.8-flash
+        if "googleapis.com" in self.get_base_url():
+            deprecated_flash = ("gemini-2.5-flash", "gemini-2.0-flash", "gemini-1.5-flash", "models/gemini-2.5-flash", "models/gemini-2.0-flash", "models/gemini-1.5-flash")
+            deprecated_pro = ("gemini-2.5-pro", "gemini-2.0-pro", "gemini-1.5-pro", "models/gemini-2.5-pro", "models/gemini-2.0-pro", "models/gemini-1.5-pro")
+            if model_name in deprecated_flash:
+                logger.info("Auto-remapping deprecated Gemini model '%s' to 'gemini-3.8-flash'.", model_name)
+                model_name = "gemini-3.8-flash"
+            elif model_name in deprecated_pro:
+                logger.info("Auto-remapping deprecated Gemini model '%s' to 'gemini-pro-latest'.", model_name)
+                model_name = "gemini-pro-latest"
 
         messages = []
         if system_prompt:

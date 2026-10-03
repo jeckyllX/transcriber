@@ -56,8 +56,9 @@ class LLMRegistry:
                 base_url_getter=lambda: settings.openai_base_url,
                 default_model_getter=lambda: settings.openai_default_model,
                 curated_models=[
-                    "gemini-2.0-flash",
-                    "gemini-1.5-flash",
+                    "gemini-3.8-flash",
+                    "gemini-flash-latest",
+                    "gemini-3.7-flash",
                     "gpt-4o-mini",
                     "gpt-4o",
                     "gpt-4-turbo",
