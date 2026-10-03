@@ -361,3 +361,66 @@ def test_settings_test_endpoint():
         data = resp.json()
         assert data["online"] is True
         assert "latency_ms" in data
+
+
+@pytest.mark.asyncio
+async def test_openai_llm_provider_model_aliases():
+    provider = OpenAICompatibleLLMProvider(
+        provider_id="custom",
+        display_name="Custom Endpoint",
+        api_key_getter="sk-test",
+        base_url_getter="https://api.custom.com/v1",
+        default_model_getter="gpt-4o-mini",
+        model_aliases={"legacy-model": "modern-model-v2", "gemini-2.5-flash": "gemini-3.8-flash"},
+    )
+
+    async def mock_aiter_lines():
+        yield 'data: {"choices":[{"delta":{"content":"ok"}}]}\n\n'
+        yield 'data: [DONE]\n\n'
+
+    mock_resp = MagicMock()
+    mock_resp.status_code = 200
+    mock_resp.aiter_lines = mock_aiter_lines
+
+    class MockStreamContext:
+        async def __aenter__(self):
+            return mock_resp
+        async def __aexit__(self, *args):
+            pass
+
+    with patch("httpx.AsyncClient.stream", return_value=MockStreamContext()) as mock_stream:
+        tokens = [t async for t in provider.generate_stream("test", model="legacy-model")]
+        assert "".join(tokens) == "ok"
+        mock_stream.assert_called_once()
+        call_json = mock_stream.call_args[1]["json"]
+        # Verify alias was resolved
+        assert call_json["model"] == "modern-model-v2"
+
+
+@pytest.mark.asyncio
+async def test_openai_llm_provider_exclude_keywords():
+    provider = OpenAICompatibleLLMProvider(
+        provider_id="custom",
+        display_name="Custom Endpoint",
+        api_key_getter="sk-test",
+        base_url_getter="https://api.custom.com/v1",
+        curated_models=["chat-main"],
+        exclude_keywords=("embedding", "tts", "deprecated-legacy"),
+    )
+
+    mock_resp = MagicMock()
+    mock_resp.status_code = 200
+    mock_resp.json.return_value = {
+        "data": [
+            {"id": "text-embedding-3"},
+            {"id": "chat-main"},
+            {"id": "tts-1"},
+            {"id": "chat-secondary"},
+            {"id": "deprecated-legacy-model"},
+        ]
+    }
+
+    with patch("httpx.AsyncClient.get", return_value=mock_resp):
+        models = await provider.list_models()
+        assert models == ["chat-main", "chat-secondary"]
+

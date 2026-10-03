@@ -33,6 +33,8 @@ class OpenAICompatibleLLMProvider(BaseLLMProvider):
         default_model_getter: Callable[[], str] | str | None = None,
         extra_headers: dict[str, str] | Callable[[], dict[str, str]] | None = None,
         curated_models: list[str] | None = None,
+        model_aliases: dict[str, str] | None = None,
+        exclude_keywords: tuple[str, ...] | None = None,
         # Backwards compatibility parameters
         api_key: str | None = None,
         base_url: str | None = None,
@@ -45,6 +47,25 @@ class OpenAICompatibleLLMProvider(BaseLLMProvider):
         self._default_model_getter = default_model_getter or default_model or (lambda: settings.openai_default_model)
         self._extra_headers = extra_headers or {}
         self.curated_models = curated_models or []
+        self.model_aliases = model_aliases or {}
+        self.exclude_keywords = exclude_keywords if exclude_keywords is not None else (
+            "embedding",
+            "tts",
+            "image",
+            "veo",
+            "lyria",
+            "robotics",
+            "aqa",
+            "clip",
+            "live-translate",
+            "transcribe",
+            "computer-use",
+            "customtools",
+            "moderation",
+            "whisper",
+            "audio-preview",
+            "realtime",
+        )
 
     def get_api_key(self) -> str | None:
         """Resolve current API key."""
@@ -91,43 +112,18 @@ class OpenAICompatibleLLMProvider(BaseLLMProvider):
                     data = resp.json()
                     raw_ids = [m.get("id") for m in data.get("data", []) if m.get("id")]
                     if raw_ids:
-                        exclude_keywords = (
-                            "embedding",
-                            "tts",
-                            "image",
-                            "veo",
-                            "lyria",
-                            "robotics",
-                            "aqa",
-                            "clip",
-                            "live-translate",
-                            "transcribe",
-                            "computer-use",
-                            "customtools",
-                            "gemini-2.5-flash",
-                            "gemini-2.5-pro",
-                            "gemini-2.0",
-                            "gemini-1.5",
-                        )
                         normalized: list[str] = []
                         for mid in raw_ids:
                             clean_id = mid.replace("models/", "")
-                            if any(kw in clean_id.lower() for kw in exclude_keywords):
+                            if any(kw in clean_id.lower() for kw in self.exclude_keywords):
                                 continue
                             normalized.append(clean_id)
 
                         if normalized:
-                            flagships = [
-                                "gemini-3.8-flash",
-                                "gemini-flash-latest",
-                                "gemini-3.7-flash",
-                                "gemini-pro-latest",
-                                "gemma-4-31b-it",
-                            ]
-                            combined_priority = self.curated_models + flagships
+                            # Prioritize configured curated models at the top
                             seen: set[str] = set()
                             top: list[str] = []
-                            for m in combined_priority:
+                            for m in self.curated_models:
                                 if m in normalized and m not in seen:
                                     seen.add(m)
                                     top.append(m)
@@ -153,16 +149,16 @@ class OpenAICompatibleLLMProvider(BaseLLMProvider):
         url = f"{self.get_base_url()}/chat/completions"
         model_name = model or self.get_default_model()
 
-        # Transparently remap deprecated Google Gemini model names to the active 3.8-flash
-        if "googleapis.com" in self.get_base_url():
-            deprecated_flash = ("gemini-2.5-flash", "gemini-2.0-flash", "gemini-1.5-flash", "models/gemini-2.5-flash", "models/gemini-2.0-flash", "models/gemini-1.5-flash")
-            deprecated_pro = ("gemini-2.5-pro", "gemini-2.0-pro", "gemini-1.5-pro", "models/gemini-2.5-pro", "models/gemini-2.0-pro", "models/gemini-1.5-pro")
-            if model_name in deprecated_flash:
-                logger.info("Auto-remapping deprecated Gemini model '%s' to 'gemini-3.8-flash'.", model_name)
-                model_name = "gemini-3.8-flash"
-            elif model_name in deprecated_pro:
-                logger.info("Auto-remapping deprecated Gemini model '%s' to 'gemini-pro-latest'.", model_name)
-                model_name = "gemini-pro-latest"
+        # Resolve model name aliases if configured
+        clean_name = model_name.replace("models/", "")
+        if clean_name in self.model_aliases:
+            target = self.model_aliases[clean_name]
+            logger.info("Resolved model alias '%s' -> '%s'.", model_name, target)
+            model_name = target
+        elif model_name in self.model_aliases:
+            target = self.model_aliases[model_name]
+            logger.info("Resolved model alias '%s' -> '%s'.", model_name, target)
+            model_name = target
 
         messages = []
         if system_prompt:

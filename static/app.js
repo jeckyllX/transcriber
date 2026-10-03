@@ -59,6 +59,16 @@ document.addEventListener("DOMContentLoaded", () => {
   const downloadAssBtn = document.getElementById("download-ass-btn");
   const downloadJsonBtn = document.getElementById("download-json-btn");
 
+  const tabBadgePolish = document.getElementById("tab-badge-polish");
+  const tabBadgeSummary = document.getElementById("tab-badge-summary");
+  const polishToolbar = document.getElementById("polish-toolbar");
+  const repolishBtn = document.getElementById("repolish-btn");
+  const summaryToolbar = document.getElementById("summary-toolbar");
+  const resummarizeBtn = document.getElementById("resummarize-btn");
+  const resummarizeLevelBtns = document.querySelectorAll(".resummarize-level-btn");
+  let resummarizeActiveLevel = "bullets";
+  let ondemandSummaryActiveLevel = "bullets";
+
   const diarizationCheckbox = document.getElementById("diarization-checkbox");
   const diarizationBadge = document.getElementById("diarization-badge");
   const numSpeakersSelect = document.getElementById("num-speakers-select");
@@ -344,18 +354,43 @@ document.addEventListener("DOMContentLoaded", () => {
     return result.buffer;
   }
 
-  // Trigger AI Polish or Summary on live streamed transcript
+  // Trigger AI Polish or Summary (live streaming or on-demand)
   async function triggerStreamingAiProcessing(text, action, detailLevel) {
     if (!text || !text.trim()) return;
     const provider = llmProviderSelect.value;
     const model = llmModelSelect.value;
+    const chosenLevel = detailLevel || activeSummaryLevel || "bullets";
 
     if (action === "polish") {
       switchResultTab("polish");
-      polishContent.textContent = "AI polishing in progress...";
+      if (polishToolbar) polishToolbar.classList.add("hidden");
+      polishContent.innerHTML = `
+        <div class="space-y-3">
+          <div class="flex items-center gap-2 text-xs font-medium text-indigo-400 animate-pulse">
+            <svg class="w-4 h-4 animate-spin text-indigo-400" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+              <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+              <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z"></path>
+            </svg>
+            <span>Polishing transcript with ${provider} (${model})...</span>
+          </div>
+          <div id="polish-streaming-target" class="text-sm text-slate-200 leading-relaxed whitespace-pre-wrap"></div>
+        </div>
+      `;
     } else if (action === "summary") {
       switchResultTab("summary");
-      summaryContent.innerHTML = `<p class="text-indigo-400 animate-pulse">Generating AI summary (${detailLevel})...</p>`;
+      if (summaryToolbar) summaryToolbar.classList.add("hidden");
+      summaryContent.innerHTML = `
+        <div class="space-y-3">
+          <div class="flex items-center gap-2 text-xs font-medium text-indigo-400 animate-pulse">
+            <svg class="w-4 h-4 animate-spin text-indigo-400" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+              <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+              <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z"></path>
+            </svg>
+            <span>Generating ${chosenLevel} summary with ${provider} (${model})...</span>
+          </div>
+          <div id="summary-streaming-target" class="prose prose-invert max-w-none text-sm leading-relaxed"></div>
+        </div>
+      `;
     }
 
     try {
@@ -365,23 +400,24 @@ document.addEventListener("DOMContentLoaded", () => {
         body: JSON.stringify({
           text: text,
           action: action,
-          detail_level: detailLevel,
+          detail_level: chosenLevel,
           provider: provider,
           model: model,
         }),
       });
 
       if (!resp.ok) {
-        throw new Error(`LLM processing request failed (${resp.status})`);
+        let errMsg = `LLM processing request failed (${resp.status})`;
+        try {
+          const errData = await resp.json();
+          if (errData.detail) errMsg = errData.detail;
+        } catch (_) {}
+        throw new Error(errMsg);
       }
 
       const reader = resp.body.getReader();
       const decoder = new TextDecoder();
       let accumulated = "";
-
-      if (action === "polish") {
-        polishContent.textContent = "";
-      }
 
       while (true) {
         const { done, value } = await reader.read();
@@ -394,32 +430,53 @@ document.addEventListener("DOMContentLoaded", () => {
             if (dataStr === "[DONE]") break;
             try {
               const parsed = JSON.parse(dataStr);
+              if (parsed.error) {
+                throw new Error(parsed.error);
+              }
               if (parsed.token) {
                 accumulated += parsed.token;
                 if (action === "polish") {
-                  polishContent.textContent = accumulated;
+                  const target = document.getElementById("polish-streaming-target");
+                  if (target) target.textContent = accumulated;
                 } else if (action === "summary") {
-                  summaryContent.innerHTML = typeof marked !== "undefined" ? marked.parse(accumulated) : accumulated;
+                  const target = document.getElementById("summary-streaming-target");
+                  if (target) {
+                    target.innerHTML = typeof marked !== "undefined" ? marked.parse(accumulated) : accumulated;
+                  }
                 }
               }
-            } catch (err) {}
+            } catch (err) {
+              if (err.message && (err.message.includes("error") || err.message.includes("failed") || err.message.includes("503") || err.message.includes("404"))) {
+                throw err;
+              }
+            }
           }
         }
       }
 
       if (action === "polish") {
         currentResult.polished = accumulated;
+        polishContent.textContent = accumulated;
+        if (polishToolbar) polishToolbar.classList.remove("hidden");
       } else if (action === "summary") {
         currentResult.summary = accumulated;
+        summaryContent.innerHTML = typeof marked !== "undefined" ? marked.parse(accumulated) : accumulated;
+        if (summaryToolbar) summaryToolbar.classList.remove("hidden");
       }
 
+      updateResultTabStates();
+      if (typeof lucide !== "undefined") lucide.createIcons();
+
     } catch (e) {
-      console.warn("Live stream AI processing error:", e);
+      console.warn("AI processing error:", e);
       if (action === "polish") {
         polishContent.innerHTML = renderAiUnavailableNotice("Polish", e.message);
+        if (polishToolbar) polishToolbar.classList.add("hidden");
       } else if (action === "summary") {
         summaryContent.innerHTML = renderAiUnavailableNotice("Summary", e.message);
+        if (summaryToolbar) summaryToolbar.classList.add("hidden");
       }
+      updateResultTabStates();
     }
   }
 
@@ -628,6 +685,10 @@ document.addEventListener("DOMContentLoaded", () => {
     transcriptPlainText.textContent = "";
     polishContent.textContent = "";
     summaryContent.innerHTML = "";
+    if (polishToolbar) polishToolbar.classList.add("hidden");
+    if (summaryToolbar) summaryToolbar.classList.add("hidden");
+    if (tabBadgePolish) tabBadgePolish.classList.add("hidden");
+    if (tabBadgeSummary) tabBadgeSummary.classList.add("hidden");
     currentResult.segments = [];
     currentResult.text = "";
     currentResult.polished = "";
@@ -721,20 +782,33 @@ document.addEventListener("DOMContentLoaded", () => {
         if (finalResult.summary && !finalResult.summary.startsWith("[AI summary skipped")) {
           currentResult.summary = finalResult.summary;
           summaryContent.innerHTML = typeof marked !== "undefined" ? marked.parse(finalResult.summary) : finalResult.summary;
-        } else {
+          if (summaryToolbar) summaryToolbar.classList.remove("hidden");
+        } else if (activeAiAction === "summary") {
           summaryContent.innerHTML = renderAiUnavailableNotice("Summary", finalResult.ai_warning || (finalResult.summary ? finalResult.summary.replace(/^\[|\]$/g, "") : null));
+          if (summaryToolbar) summaryToolbar.classList.add("hidden");
         }
 
         if (finalResult.polished && !finalResult.polished.startsWith("[AI polish skipped")) {
           currentResult.polished = finalResult.polished;
           polishContent.textContent = finalResult.polished;
-        } else {
+          if (polishToolbar) polishToolbar.classList.remove("hidden");
+        } else if (activeAiAction === "polish") {
           polishContent.innerHTML = renderAiUnavailableNotice("Polish", finalResult.ai_warning || (finalResult.polished ? finalResult.polished.replace(/^\[|\]$/g, "") : null));
+          if (polishToolbar) polishToolbar.classList.add("hidden");
         }
 
         const speakerCountStr = finalResult.num_speakers ? ` • ${finalResult.num_speakers} Speaker${finalResult.num_speakers > 1 ? "s" : ""} Identified` : "";
         transcriptionStats.textContent = `Duration: ${finalResult.duration.toFixed(1)}s • Processed in: ${finalResult.processing_time}s • Language: ${(finalResult.language || "auto").toUpperCase()}${speakerCountStr}`;
         transcriptPlainText.textContent = finalResult.text;
+
+        updateResultTabStates();
+        if (activeAiAction === "summary" && currentResult.summary) {
+          switchResultTab("summary");
+        } else if (activeAiAction === "polish" && currentResult.polished) {
+          switchResultTab("polish");
+        } else {
+          switchResultTab("transcript");
+        }
       });
 
       eventSource.addEventListener("failed", (e) => {
@@ -974,18 +1048,137 @@ document.addEventListener("DOMContentLoaded", () => {
           <svg class="w-4 h-4 text-amber-400 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/>
           </svg>
-          <span>AI ${actionName} Not Available</span>
+          <span>AI ${actionName} Error / Not Available</span>
         </div>
         <p class="text-xs text-slate-300 leading-relaxed">${detail}</p>
         <div class="pt-2 border-t border-amber-500/20 text-xs text-slate-400 space-y-1">
-          <p class="font-medium text-slate-300">To enable AI ${actionName.toLowerCase()}:</p>
+          <p class="font-medium text-slate-300">To resolve:</p>
           <ul class="list-disc list-inside space-y-0.5 text-slate-300">
-            <li>Start local Ollama with <code class="px-1.5 py-0.5 bg-slate-900 rounded font-mono text-amber-300 text-[11px]">ollama serve</code></li>
-            <li>Or configure a remote Ollama host / cloud API key in <span class="text-indigo-400 font-medium cursor-pointer hover:underline" onclick="document.getElementById('settings-btn').click()">Settings</span></li>
+            <li>Verify your API Key / host in <span class="text-indigo-400 font-medium cursor-pointer hover:underline" onclick="document.getElementById('open-settings-btn').click()">Settings</span></li>
+            <li>If using local Ollama, ensure it is running with <code class="px-1.5 py-0.5 bg-slate-900 rounded font-mono text-amber-300 text-[11px]">ollama serve</code></li>
           </ul>
         </div>
       </div>
     `;
+  }
+
+  function renderOnDemandPolishCard() {
+    return `
+      <div class="py-8 px-4 text-center max-w-md mx-auto space-y-4">
+        <div class="w-12 h-12 rounded-2xl bg-indigo-500/10 border border-indigo-500/20 text-indigo-400 flex items-center justify-center mx-auto shadow-inner">
+          <i data-lucide="sparkles" class="w-6 h-6"></i>
+        </div>
+        <div class="space-y-1">
+          <h4 class="text-sm font-semibold text-slate-200">Transcript Polishing Not Run</h4>
+          <p class="text-xs text-slate-400 leading-relaxed">
+            Polish this transcript to fix punctuation, remove filler words ("um", "uh"), and improve grammar using your selected AI model.
+          </p>
+        </div>
+        <div class="pt-2">
+          <button id="ondemand-polish-btn" class="px-5 py-2.5 rounded-xl text-xs font-semibold bg-gradient-to-r from-indigo-600 to-violet-600 hover:from-indigo-500 hover:to-violet-500 text-white shadow-lg shadow-indigo-600/25 flex items-center justify-center gap-2 mx-auto transition-all">
+            <i data-lucide="sparkles" class="w-4 h-4"></i> Polish Transcript Now
+          </button>
+        </div>
+      </div>
+    `;
+  }
+
+  function renderOnDemandSummaryCard() {
+    return `
+      <div class="py-8 px-4 text-center max-w-lg mx-auto space-y-4">
+        <div class="w-12 h-12 rounded-2xl bg-indigo-500/10 border border-indigo-500/20 text-indigo-400 flex items-center justify-center mx-auto shadow-inner">
+          <i data-lucide="list-collapse" class="w-6 h-6"></i>
+        </div>
+        <div class="space-y-1">
+          <h4 class="text-sm font-semibold text-slate-200">AI Summary Not Run</h4>
+          <p class="text-xs text-slate-400 leading-relaxed">
+            Choose a detail level and generate an AI summary from this transcript:
+          </p>
+        </div>
+        <div class="grid grid-cols-2 sm:grid-cols-4 gap-2 pt-1 text-xs">
+          <button type="button" data-ondemand-level="tldr" class="ondemand-level-chip py-1.5 px-2 rounded-lg border border-slate-700 bg-slate-900 text-slate-300 transition-all">TL;DR</button>
+          <button type="button" data-ondemand-level="bullets" class="ondemand-level-chip active py-1.5 px-2 rounded-lg border border-indigo-500 bg-indigo-500/10 text-indigo-400 font-medium transition-all">Key Points</button>
+          <button type="button" data-ondemand-level="detailed" class="ondemand-level-chip py-1.5 px-2 rounded-lg border border-slate-700 bg-slate-900 text-slate-300 transition-all">Detailed</button>
+          <button type="button" data-ondemand-level="action_items" class="ondemand-level-chip py-1.5 px-2 rounded-lg border border-slate-700 bg-slate-900 text-slate-300 transition-all">Action Items</button>
+        </div>
+        <div class="pt-2">
+          <button id="ondemand-summary-btn" class="px-5 py-2.5 rounded-xl text-xs font-semibold bg-gradient-to-r from-indigo-600 to-violet-600 hover:from-indigo-500 hover:to-violet-500 text-white shadow-lg shadow-indigo-600/25 flex items-center justify-center gap-2 mx-auto transition-all">
+            <i data-lucide="list-collapse" class="w-4 h-4"></i> Generate Summary Now
+          </button>
+        </div>
+      </div>
+    `;
+  }
+
+  function attachOnDemandPolishListeners() {
+    const btn = document.getElementById("ondemand-polish-btn");
+    if (btn) {
+      btn.addEventListener("click", () => {
+        if (!currentResult.text || !currentResult.text.trim()) {
+          alert("No transcript content available to polish.");
+          return;
+        }
+        triggerStreamingAiProcessing(currentResult.text, "polish");
+      });
+    }
+    if (typeof lucide !== "undefined") lucide.createIcons();
+  }
+
+  function attachOnDemandSummaryListeners() {
+    const chips = summaryContent.querySelectorAll(".ondemand-level-chip");
+    chips.forEach((c) => {
+      c.addEventListener("click", () => {
+        chips.forEach((x) => {
+          x.classList.remove("active", "border-indigo-500", "bg-indigo-500/10", "text-indigo-400", "font-medium");
+          x.classList.add("border-slate-700", "bg-slate-900", "text-slate-300");
+        });
+        c.classList.add("active", "border-indigo-500", "bg-indigo-500/10", "text-indigo-400", "font-medium");
+        c.classList.remove("border-slate-700", "bg-slate-900", "text-slate-300");
+        ondemandSummaryActiveLevel = c.getAttribute("data-ondemand-level");
+      });
+    });
+
+    const btn = document.getElementById("ondemand-summary-btn");
+    if (btn) {
+      btn.addEventListener("click", () => {
+        if (!currentResult.text || !currentResult.text.trim()) {
+          alert("No transcript content available to summarize.");
+          return;
+        }
+        triggerStreamingAiProcessing(currentResult.text, "summary", ondemandSummaryActiveLevel);
+      });
+    }
+    if (typeof lucide !== "undefined") lucide.createIcons();
+  }
+
+  function updateResultTabStates() {
+    if (tabBadgePolish) {
+      if (currentResult.polished && currentResult.polished.trim()) {
+        tabBadgePolish.textContent = "Ready";
+        tabBadgePolish.className = "text-[10px] px-1.5 py-0.5 rounded-full font-medium bg-emerald-500/15 text-emerald-400 border border-emerald-500/30";
+        tabBadgePolish.classList.remove("hidden");
+        if (polishToolbar) polishToolbar.classList.remove("hidden");
+      } else {
+        tabBadgePolish.textContent = "+ Polish";
+        tabBadgePolish.className = "text-[10px] px-1.5 py-0.5 rounded-full font-medium bg-slate-800 text-slate-400 border border-slate-700/60";
+        tabBadgePolish.classList.remove("hidden");
+        if (polishToolbar) polishToolbar.classList.add("hidden");
+      }
+    }
+
+    if (tabBadgeSummary) {
+      if (currentResult.summary && currentResult.summary.trim()) {
+        tabBadgeSummary.textContent = "Ready";
+        tabBadgeSummary.className = "text-[10px] px-1.5 py-0.5 rounded-full font-medium bg-emerald-500/15 text-emerald-400 border border-emerald-500/30";
+        tabBadgeSummary.classList.remove("hidden");
+        if (summaryToolbar) summaryToolbar.classList.remove("hidden");
+      } else {
+        tabBadgeSummary.textContent = "+ Summary";
+        tabBadgeSummary.className = "text-[10px] px-1.5 py-0.5 rounded-full font-medium bg-slate-800 text-slate-400 border border-slate-700/60";
+        tabBadgeSummary.classList.remove("hidden");
+        if (summaryToolbar) summaryToolbar.classList.add("hidden");
+      }
+    }
   }
 
   function switchResultTab(tabName) {
@@ -997,25 +1190,69 @@ document.addEventListener("DOMContentLoaded", () => {
 
     if (tabName === "transcript") {
       resTabTranscript.classList.add("active", "text-indigo-400", "bg-indigo-500/10");
+      resTabTranscript.classList.remove("text-slate-400");
       viewportTranscript.classList.remove("hidden");
     } else if (tabName === "polish") {
       resTabPolish.classList.add("active", "text-indigo-400", "bg-indigo-500/10");
+      resTabPolish.classList.remove("text-slate-400");
       viewportPolish.classList.remove("hidden");
-      if (!currentResult.polished && !polishContent.textContent.trim()) {
-        polishContent.innerHTML = renderAiUnavailableNotice("Polish");
+      if (currentResult.polished && currentResult.polished.trim()) {
+        polishContent.textContent = currentResult.polished;
+        if (polishToolbar) polishToolbar.classList.remove("hidden");
+      } else if (!polishContent.textContent.trim()) {
+        polishContent.innerHTML = renderOnDemandPolishCard();
+        attachOnDemandPolishListeners();
       }
     } else if (tabName === "summary") {
       resTabSummary.classList.add("active", "text-indigo-400", "bg-indigo-500/10");
+      resTabSummary.classList.remove("text-slate-400");
       viewportSummary.classList.remove("hidden");
-      if (!currentResult.summary && !summaryContent.textContent.trim()) {
-        summaryContent.innerHTML = renderAiUnavailableNotice("Summary");
+      if (currentResult.summary && currentResult.summary.trim()) {
+        summaryContent.innerHTML = typeof marked !== "undefined" ? marked.parse(currentResult.summary) : currentResult.summary;
+        if (summaryToolbar) summaryToolbar.classList.remove("hidden");
+      } else if (!summaryContent.textContent.trim()) {
+        summaryContent.innerHTML = renderOnDemandSummaryCard();
+        attachOnDemandSummaryListeners();
       }
     }
+    if (typeof lucide !== "undefined") lucide.createIcons();
   }
 
   resTabTranscript.addEventListener("click", () => switchResultTab("transcript"));
   resTabPolish.addEventListener("click", () => switchResultTab("polish"));
   resTabSummary.addEventListener("click", () => switchResultTab("summary"));
+
+  // Re-run buttons in toolbars
+  if (repolishBtn) {
+    repolishBtn.addEventListener("click", () => {
+      if (!currentResult.text || !currentResult.text.trim()) return;
+      triggerStreamingAiProcessing(currentResult.text, "polish");
+    });
+  }
+
+  if (resummarizeBtn) {
+    resummarizeBtn.addEventListener("click", () => {
+      if (!currentResult.text || !currentResult.text.trim()) return;
+      triggerStreamingAiProcessing(currentResult.text, "summary", resummarizeActiveLevel);
+    });
+  }
+
+  if (resummarizeLevelBtns) {
+    resummarizeLevelBtns.forEach((btn) => {
+      btn.addEventListener("click", () => {
+        resummarizeLevelBtns.forEach((b) => {
+          b.classList.remove("active", "text-indigo-400", "bg-indigo-500/10", "font-medium");
+          b.classList.add("text-slate-400");
+        });
+        btn.classList.add("active", "text-indigo-400", "bg-indigo-500/10", "font-medium");
+        btn.classList.remove("text-slate-400");
+        resummarizeActiveLevel = btn.getAttribute("data-resummarize-level");
+        if (currentResult.text && currentResult.text.trim()) {
+          triggerStreamingAiProcessing(currentResult.text, "summary", resummarizeActiveLevel);
+        }
+      });
+    });
+  }
 
   // Copy & Download
   copyBtn.addEventListener("click", () => {
@@ -1045,7 +1282,18 @@ document.addEventListener("DOMContentLoaded", () => {
     URL.revokeObjectURL(url);
   }
 
-  downloadTxtBtn.addEventListener("click", () => downloadFile("transcript.txt", currentResult.text, "text/plain"));
+  downloadTxtBtn.addEventListener("click", () => {
+    let content = currentResult.text;
+    let filename = "transcript.txt";
+    if (!viewportPolish.classList.contains("hidden") && currentResult.polished) {
+      content = currentResult.polished;
+      filename = "transcript_polished.txt";
+    } else if (!viewportSummary.classList.contains("hidden") && currentResult.summary) {
+      content = currentResult.summary;
+      filename = "transcript_summary.txt";
+    }
+    downloadFile(filename, content, "text/plain");
+  });
   downloadSrtBtn.addEventListener("click", () => downloadFile("subtitles.srt", currentResult.srt, "text/plain"));
   downloadVttBtn.addEventListener("click", () => downloadFile("subtitles.vtt", currentResult.vtt, "text/vtt"));
   if (downloadAssBtn) {
