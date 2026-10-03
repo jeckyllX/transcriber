@@ -1,48 +1,44 @@
-# Audio Transcriber & AI Summarizer
+# Audio Transcriber
 
-A modular audio transcription and AI analysis platform. Accepts audio/video media in any format, standardizes it to Whisper-optimized 16kHz mono WAV via FFmpeg, transcribes it with Whisper, polishes or summarizes it with selectable LLM models (Ollama or OpenAI-compatible), and dispatches notifications across multiple channels (Telegram, Webhooks).
+Audio and video transcription tool powered by Whisper, ONNX speaker diarization, and optional LLM post-processing. Converts media to 16kHz mono WAV via FFmpeg, transcribes using local or API Whisper engines, and optionally polishes or summarizes transcripts using local or cloud LLMs.
 
 <p align="center">
-  <img src="docs/screenshots/dashboard.png" alt="Audio Transcriber & AI Summarizer Dashboard" width="100%">
+  <img src="docs/screenshots/dashboard.png" alt="Audio Transcriber Dashboard" width="100%">
 </p>
 
 ---
 
-## Key Features
+## Features
 
-- **Universal Media Ingestion**: Supports `.mp3`, `.wav`, `.m4a`, `.ogg`, `.flac`, `.aac`, `.opus`, `.webm`, `.mp4`, `.mkv`, etc.
-- **FFmpeg Standardization**: Automatically downmixes and resamples any container and codec to Whisper's ideal format: **16,000 Hz, 1-channel mono, 16-bit PCM WAV**.
+- **Audio Ingestion & Conversion**: Ingests `.mp3`, `.wav`, `.m4a`, `.ogg`, `.flac`, `.aac`, `.opus`, `.webm`, `.mp4`, `.mkv`, etc., and standardizes to 16,000 Hz, 1-channel mono, 16-bit PCM WAV via FFmpeg.
 - **Whisper Transcription Engine**:
-  - `faster-whisper` (CTranslate2 with CPU `int8` quantization for fast, low-memory inference).
+  - `faster-whisper` (CTranslate2 with CPU `int8` quantization).
   - `whisper.cpp` standalone C++ binary runner with SHA256 verification and compilation fallback.
-  - Generates plain text, timestamped interactive segments, and subtitle exports (**SRT**, **WebVTT**, **ASS**, **JSON**).
+  - Cloud STT via OpenAI-compatible endpoints (Groq Whisper, OpenRouter).
+  - Subtitle and transcript export: plain text, timestamped segments, **SRT**, **WebVTT**, **ASS**, **JSON**.
 - **Speaker Diarization (ONNX)**:
-  - Offline multi-speaker identification and dialogue turn segmentation powered by `sherpa-onnx` (Pyannote 3.0 segmentation + 3D-Speaker embedding neural networks).
-  - 100% CPU inference with zero PyTorch or GPU requirements.
-  - On-demand model provisioning: models are fetched automatically only when diarization is first requested.
-  - Interactive inline speaker renaming that updates exports and dialogue turns in real time.
-- **Live Real-Time Dictation (WebSockets)**:
-  - Low-latency live microphone streaming over WebSockets (`/api/ws/transcribe`).
-  - Sliding-window decoding with energy VAD and silence pause detection running asynchronously in background worker threads.
-  - Interactive live UI displaying interim words in real time with visual audio equalizer waves and automatic handoff to full results export and AI processing.
-- **Word-Level Precision & Karaoke Playback**:
-  - Precise word-level timestamps with speech recognition confidence scores.
-  - Real-time karaoke-style word highlighting synchronized with audio playback.
-  - Click-to-seek navigation: clicking any word or timestamp instantly seeks the audio player to that exact moment.
-- **Extensible AI Intelligence (Ollama, Groq, OpenRouter & Beyond)**:
-  - **Cloud STT Acceleration**: Near-instant transcription using Groq Cloud Whisper (`whisper-large-v3-turbo`, `distil-whisper`) or OpenRouter, with automatic audio compression and chunking for files exceeding the 25MB API limit.
-  - **Transcript Polish & Summarization**: Choose between local Ollama models or ultra-fast cloud LLMs (Groq Llama 3.3 70B, OpenRouter Claude/DeepSeek-R1, custom vLLM).
-  - **Universal Profile-Driven Adapters**: Zero vendor-specific subclasses. Both STT and LLM integrations adhere to standard OpenAI REST specifications and can be plugged declaratively via `config.json` or the Settings UI.
-  - **Interactive Settings & Connection Testing**: In-browser latency benchmarking and connection verification with masked credential security.
-- **Modular Notification Dispatcher (Strategy Pattern)**:
-  - **Telegram Bot**: Sends rich HTML notifications with execution stats, formatted summaries, and full transcript documents (`.txt` / `.md`).
-  - **Generic Webhook**: Dispatches standard JSON POST payloads to automation workflows (n8n, Make, Zapier, Discord, Slack).
-  - Open for extension: Add Slack, Email, or Discord providers without modifying core transcription code.
-- **Modern Responsive Dashboard**:
-  - Drag-and-drop file upload with format inspection.
-  - In-browser microphone audio recorder with live WebSocket dictation.
-  - Audio player with interactive timestamp seeking and word karaoke highlighting.
-  - Clean dark theme built with Tailwind CSS and Lucide icons.
+  - Offline speaker identification and turn segmentation using `sherpa-onnx` (Pyannote 3.0 segmentation + 3D-Speaker embedding models on CPU).
+  - On-demand model download on first use.
+  - Inline speaker renaming that updates exports and dialogue turns.
+- **Live Dictation (WebSockets)**:
+  - Real-time microphone audio streaming over WebSockets (`/api/ws/transcribe`).
+  - Sliding-window decoding with energy-based VAD and silence detection.
+  - Interactive live UI with transcript feed and export handoff.
+- **Word-Level Timestamps & Playback**:
+  - Word-level timestamps and confidence scores.
+  - Audio player with click-to-seek navigation (clicking any word seeks audio playback to that position).
+  - Playback highlighting synchronized with audio.
+- **LLM Post-Processing**:
+  - Transcript polishing (grammar and punctuation cleanup) and summarization (TL;DR, key takeaways, detailed, action items).
+  - Supports local Ollama or any OpenAI-compatible API (Groq, OpenRouter, self-hosted vLLM/llama.cpp, etc.).
+  - Streaming token output.
+- **Notifications**:
+  - Telegram bot: sends execution stats, formatted summaries, and transcript files (`.txt` / `.md`).
+  - Webhook: dispatches JSON POST payloads on job completion.
+- **Web UI**:
+  - Single-page interface with drag-and-drop file upload and microphone recording.
+  - Transcript view with speaker dialogue grouping and export options.
+  - Settings modal for configuring API keys, endpoints, and notifications.
   - Zero Node/NPM dependencies needed to run.
 
 ---
@@ -78,11 +74,11 @@ cp config.json.example config.json
 | `HOST` | `0.0.0.0` | Server bind address |
 | `PORT` | `8000` | Server HTTP port |
 | `DEFAULT_WHISPER_MODEL`| `base` | Default Whisper model (`tiny`, `base`, `small`, `medium`) |
-| `GROQ_API_KEY` | | Groq Cloud API Key for ultra-fast Whisper & Llama 3.3 |
-| `OPENROUTER_API_KEY` | | OpenRouter API Key for cloud Whisper, Claude, DeepSeek |
-| `OPENAI_API_KEY` | | OpenAI / Custom OpenAI-compatible API Key |
+| `GROQ_API_KEY` | | Groq API Key |
+| `OPENROUTER_API_KEY` | | OpenRouter API Key |
+| `OPENAI_API_KEY` | | OpenAI or OpenAI-compatible API Key |
 | `OLLAMA_BASE_URL` | `http://127.0.0.1:11434` | Local Ollama API endpoint |
-| `DEFAULT_OLLAMA_MODEL` | `llama3.2` | Default model for polishing & summaries |
+| `DEFAULT_OLLAMA_MODEL` | `llama3.2` | Default model for polishing and summaries |
 | `TELEGRAM_ENABLED` | `false` | Enable Telegram notification dispatch |
 | `TELEGRAM_BOT_TOKEN` | | Telegram Bot Token from `@BotFather` |
 | `TELEGRAM_CHAT_ID` | | Target Chat or Channel ID |
@@ -145,11 +141,11 @@ transcriber/
 │   ├── prompts.py             # Decoupled prompts (Polish + 5 summary tiers with speaker headers)
 │   └── registry.py            # LLM provider registry
 ├── templates/
-│   └── index.html             # Modern responsive web dashboard
+│   └── index.html             # Web UI template
 ├── static/
 │   ├── app.js                 # UI controller, mic recording, SSE streams, live dictation
-│   └── style.css              # Custom styling & animations
-└── tests/                     # 48 automated tests covering all subsystems
+│   └── style.css              # Custom CSS
+└── tests/                     # 50 automated tests covering all subsystems
 ```
 
 ---

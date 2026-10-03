@@ -22,8 +22,8 @@
           <i data-lucide="mic" class="w-5 h-5 text-white"></i>
         </div>
         <div>
-          <h1 class="text-lg font-semibold tracking-tight text-white flex items-center gap-2">
-            Audio Transcriber <span class="text-xs px-2 py-0.5 rounded-full bg-indigo-500/10 text-indigo-400 border border-indigo-500/20">AI Enhanced</span>
+          <h1 class="text-lg font-semibold tracking-tight text-white">
+            Audio Transcriber
           </h1>
           <p class="text-xs text-slate-400">Whisper • ONNX Diarization • Local & Cloud LLMs</p>
         </div>
@@ -162,7 +162,7 @@
               <select id="whisper-engine-select" class="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-200 focus:outline-none focus:border-indigo-500">
                 <option value="faster-whisper" selected>Faster Whisper (Local Python)</option>
                 <option value="whisper.cpp">Whisper C++ Binary (Local)</option>
-                <option value="groq">Groq Cloud Whisper (Ultra-Fast)</option>
+                <option value="groq">Groq Cloud Whisper</option>
                 <option value="openrouter">OpenRouter Cloud Whisper</option>
                 <option value="openai">OpenAI Cloud Whisper</option>
               </select>
@@ -228,7 +228,7 @@
               <label class="block text-xs font-medium text-slate-300 mb-1.5">AI Provider</label>
               <select id="llm-provider-select" class="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-200 focus:outline-none focus:border-indigo-500">
                 <option value="ollama" selected>Ollama (Local)</option>
-                <option value="groq">Groq Cloud (Ultra-Fast)</option>
+                <option value="groq">Groq Cloud</option>
                 <option value="openrouter">OpenRouter (Multi-Model)</option>
                 <option value="openai_compat">OpenAI Compatible / Custom</option>
               </select>
@@ -419,7 +419,7 @@
         <div class="border border-slate-800 rounded-xl p-4 bg-slate-950/40 space-y-3">
           <div class="flex items-center justify-between">
             <span class="font-medium text-slate-200 flex items-center gap-2">
-              <i data-lucide="zap" class="w-4 h-4 text-amber-400"></i> Groq Cloud (Ultra-Fast STT & LLM)
+              <i data-lucide="zap" class="w-4 h-4 text-amber-400"></i> Groq Cloud
             </span>
             <button id="test-groq-btn" class="px-2.5 py-1 text-xs font-medium rounded-lg bg-amber-500/10 hover:bg-amber-500/20 text-amber-400 border border-amber-500/20">
               Test Connection

@@ -23,7 +23,7 @@ class TranscriberFactory:
             "faster-whisper": FasterWhisperTranscriber(),
             "groq": OpenAICompatibleTranscriber(
                 name="groq",
-                display_name="Groq Cloud Whisper (Ultra-Fast)",
+                display_name="Groq Cloud Whisper",
                 base_url_getter=lambda: settings.groq_base_url,
                 api_key_getter=lambda: settings.groq_api_key,
                 default_model=settings.groq_default_stt_model,

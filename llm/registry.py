@@ -21,7 +21,7 @@ class LLMRegistry:
             "ollama": OllamaLLMProvider(),
             "groq": OpenAICompatibleLLMProvider(
                 provider_id="groq",
-                display_name="Groq Cloud (Ultra-Fast)",
+                display_name="Groq Cloud",
                 api_key_getter=lambda: settings.groq_api_key,
                 base_url_getter=lambda: settings.groq_base_url,
                 default_model_getter=lambda: settings.groq_default_model,
