@@ -122,6 +122,99 @@ document.addEventListener("DOMContentLoaded", () => {
   let activeAiAction = "summary"; // 'raw', 'polish', 'summary'
   let activeSummaryLevel = "bullets"; // 'tldr', 'bullets', 'detailed', 'action_items', 'custom'
 
+  // LocalStorage UI Preferences Persistence
+  const UI_STORAGE_KEY = "transcriber_ui_preferences_v1";
+
+  function getStoredPreferences() {
+    try {
+      const raw = localStorage.getItem(UI_STORAGE_KEY);
+      return raw ? JSON.parse(raw) : {};
+    } catch (_) {
+      return {};
+    }
+  }
+
+  function savePreference(key, value) {
+    try {
+      const prefs = getStoredPreferences();
+      prefs[key] = value;
+      localStorage.setItem(UI_STORAGE_KEY, JSON.stringify(prefs));
+    } catch (_) {}
+  }
+
+  function applyStoredPreferences() {
+    const prefs = getStoredPreferences();
+
+    // 1. Whisper Engine
+    if (prefs.whisper_engine && whisperEngineSelect) {
+      const exists = Array.from(whisperEngineSelect.options).some((o) => o.value === prefs.whisper_engine);
+      if (exists) whisperEngineSelect.value = prefs.whisper_engine;
+    }
+
+    // 2. Language
+    if (prefs.language && languageSelect) {
+      const exists = Array.from(languageSelect.options).some((o) => o.value === prefs.language);
+      if (exists) languageSelect.value = prefs.language;
+    }
+
+    // 3. AI Action (raw, polish, summary)
+    if (prefs.ai_action) {
+      activeAiAction = prefs.ai_action;
+      const aiBtns = document.querySelectorAll(".ai-action-btn");
+      aiBtns.forEach((btn) => {
+        if (btn.getAttribute("data-action") === activeAiAction) {
+          btn.classList.add("active", "border-indigo-500", "bg-indigo-500/10", "text-indigo-400");
+          btn.classList.remove("border-slate-700", "bg-slate-950", "text-slate-300");
+        } else {
+          btn.classList.remove("active", "border-indigo-500", "bg-indigo-500/10", "text-indigo-400");
+          btn.classList.add("border-slate-700", "bg-slate-950", "text-slate-300");
+        }
+      });
+      if (summaryOptionsBox) {
+        if (activeAiAction === "summary") {
+          summaryOptionsBox.classList.remove("hidden");
+        } else {
+          summaryOptionsBox.classList.add("hidden");
+        }
+      }
+    }
+
+    // 4. Summary Detail Level
+    if (prefs.summary_level) {
+      activeSummaryLevel = prefs.summary_level;
+      const lvlBtns = document.querySelectorAll(".summary-level-btn");
+      lvlBtns.forEach((btn) => {
+        if (btn.getAttribute("data-level") === activeSummaryLevel) {
+          btn.classList.add("active", "border-indigo-500", "bg-indigo-500/10", "text-indigo-400");
+          btn.classList.remove("border-slate-700", "bg-slate-950", "text-slate-300");
+        } else {
+          btn.classList.remove("active", "border-indigo-500", "bg-indigo-500/10", "text-indigo-400");
+          btn.classList.add("border-slate-700", "bg-slate-950", "text-slate-300");
+        }
+      });
+    }
+
+    // 5. LLM Provider
+    if (prefs.llm_provider && llmProviderSelect) {
+      const exists = Array.from(llmProviderSelect.options).some((o) => o.value === prefs.llm_provider);
+      if (exists) llmProviderSelect.value = prefs.llm_provider;
+    }
+
+    // 6. Diarization & Checkboxes
+    if (prefs.diarization_enabled !== undefined && diarizationCheckbox) {
+      diarizationCheckbox.checked = Boolean(prefs.diarization_enabled);
+    }
+    if (prefs.num_speakers !== undefined && numSpeakersSelect) {
+      numSpeakersSelect.value = prefs.num_speakers;
+    }
+    if (prefs.vad_enabled !== undefined && vadCheckbox) {
+      vadCheckbox.checked = Boolean(prefs.vad_enabled);
+    }
+    if (prefs.notify_enabled !== undefined && notifyCheckbox) {
+      notifyCheckbox.checked = Boolean(prefs.notify_enabled);
+    }
+  }
+
   let currentResult = {
     text: "",
     srt: "",
@@ -198,18 +291,34 @@ document.addEventListener("DOMContentLoaded", () => {
 
   async function loadLlmModels() {
     const provider = llmProviderSelect.value;
+    const prefs = getStoredPreferences();
+    const savedModel = (prefs.llm_models && prefs.llm_models[provider]) || (prefs.llm_provider === provider ? prefs.llm_model : null);
+
     try {
       const res = await fetch(`/api/llm/models?provider=${provider}`);
       if (res.ok) {
         const data = await res.json();
         llmModelSelect.innerHTML = "";
         if (data.models && data.models.length > 0) {
+          let matched = false;
           data.models.forEach((m) => {
             const opt = document.createElement("option");
             opt.value = m;
             opt.textContent = m;
+            if (savedModel && m === savedModel) {
+              opt.selected = true;
+              matched = true;
+            }
             llmModelSelect.appendChild(opt);
           });
+          if (matched && savedModel) {
+            llmModelSelect.value = savedModel;
+          } else {
+            const models = prefs.llm_models || {};
+            models[provider] = llmModelSelect.value;
+            savePreference("llm_models", models);
+            savePreference("llm_model", llmModelSelect.value);
+          }
         } else {
           const opt = document.createElement("option");
           opt.value = "llama3.2";
@@ -224,12 +333,16 @@ document.addEventListener("DOMContentLoaded", () => {
 
   async function updateWhisperModels() {
     const engine = whisperEngineSelect.value;
+    const prefs = getStoredPreferences();
+    const savedModel = (prefs.whisper_models && prefs.whisper_models[engine]) || (prefs.whisper_engine === engine ? prefs.whisper_model : null);
+
     try {
       const res = await fetch(`/api/whisper/models?engine=${engine}`);
       if (res.ok) {
         const data = await res.json();
         if (data.models && data.models.length > 0) {
           whisperModelSelect.innerHTML = "";
+          let matched = false;
           data.models.forEach((m) => {
             const opt = document.createElement("option");
             opt.value = m;
@@ -244,8 +357,20 @@ document.addEventListener("DOMContentLoaded", () => {
             else if (m === "openai/whisper-large-v3") label = "OpenAI Whisper Large v3 (Default)";
             else if (m === "openai/whisper-large-v3-turbo") label = "OpenAI Whisper Large v3 Turbo";
             opt.textContent = label;
+            if (savedModel && m === savedModel) {
+              opt.selected = true;
+              matched = true;
+            }
             whisperModelSelect.appendChild(opt);
           });
+          if (matched && savedModel) {
+            whisperModelSelect.value = savedModel;
+          } else {
+            const models = prefs.whisper_models || {};
+            models[engine] = whisperModelSelect.value;
+            savePreference("whisper_models", models);
+            savePreference("whisper_model", whisperModelSelect.value);
+          }
         }
       }
     } catch (e) {
@@ -253,9 +378,65 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   }
 
-  whisperEngineSelect.addEventListener("change", updateWhisperModels);
-  llmProviderSelect.addEventListener("change", loadLlmModels);
+  whisperEngineSelect.addEventListener("change", () => {
+    savePreference("whisper_engine", whisperEngineSelect.value);
+    updateWhisperModels();
+  });
+
+  whisperModelSelect.addEventListener("change", () => {
+    const engine = whisperEngineSelect.value;
+    const model = whisperModelSelect.value;
+    savePreference("whisper_model", model);
+    const prefs = getStoredPreferences();
+    const models = prefs.whisper_models || {};
+    models[engine] = model;
+    savePreference("whisper_models", models);
+  });
+
+  languageSelect.addEventListener("change", () => {
+    savePreference("language", languageSelect.value);
+  });
+
+  llmProviderSelect.addEventListener("change", () => {
+    savePreference("llm_provider", llmProviderSelect.value);
+    loadLlmModels();
+  });
+
+  llmModelSelect.addEventListener("change", () => {
+    const provider = llmProviderSelect.value;
+    const model = llmModelSelect.value;
+    savePreference("llm_model", model);
+    const prefs = getStoredPreferences();
+    const models = prefs.llm_models || {};
+    models[provider] = model;
+    savePreference("llm_models", models);
+  });
+
   refreshModelsBtn.addEventListener("click", loadLlmModels);
+
+  if (diarizationCheckbox) {
+    diarizationCheckbox.addEventListener("change", () => {
+      savePreference("diarization_enabled", diarizationCheckbox.checked);
+    });
+  }
+
+  if (numSpeakersSelect) {
+    numSpeakersSelect.addEventListener("change", () => {
+      savePreference("num_speakers", numSpeakersSelect.value);
+    });
+  }
+
+  if (vadCheckbox) {
+    vadCheckbox.addEventListener("change", () => {
+      savePreference("vad_enabled", vadCheckbox.checked);
+    });
+  }
+
+  if (notifyCheckbox) {
+    notifyCheckbox.addEventListener("change", () => {
+      savePreference("notify_enabled", notifyCheckbox.checked);
+    });
+  }
 
   // Tabs: Upload vs Record
   tabUploadBtn.addEventListener("click", () => {
@@ -639,6 +820,7 @@ document.addEventListener("DOMContentLoaded", () => {
       btn.classList.remove("border-slate-700", "bg-slate-950", "text-slate-300");
 
       activeAiAction = btn.getAttribute("data-action");
+      savePreference("ai_action", activeAiAction);
       if (activeAiAction === "summary") {
         summaryOptionsBox.classList.remove("hidden");
       } else {
@@ -658,6 +840,7 @@ document.addEventListener("DOMContentLoaded", () => {
       btn.classList.add("active", "border-indigo-500", "bg-indigo-500/10", "text-indigo-400");
       btn.classList.remove("border-slate-700", "bg-slate-950", "text-slate-300");
       activeSummaryLevel = btn.getAttribute("data-level");
+      savePreference("summary_level", activeSummaryLevel);
     });
   });
 
@@ -1064,47 +1247,46 @@ document.addEventListener("DOMContentLoaded", () => {
 
   function renderOnDemandPolishCard() {
     return `
-      <div class="py-8 px-4 text-center max-w-md mx-auto space-y-4">
-        <div class="w-12 h-12 rounded-2xl bg-indigo-500/10 border border-indigo-500/20 text-indigo-400 flex items-center justify-center mx-auto shadow-inner">
-          <i data-lucide="sparkles" class="w-6 h-6"></i>
+      <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-1">
+        <div class="flex items-center gap-3">
+          <div class="w-8 h-8 rounded-lg bg-indigo-500/10 border border-indigo-500/20 text-indigo-400 flex items-center justify-center flex-shrink-0">
+            <i data-lucide="sparkles" class="w-4 h-4"></i>
+          </div>
+          <div>
+            <h4 class="text-xs font-semibold text-slate-200">Transcript Polishing Not Run</h4>
+            <p class="text-[11px] text-slate-400 mt-0.5">Clean up grammar, fix punctuation, and remove filler words using your selected AI model.</p>
+          </div>
         </div>
-        <div class="space-y-1">
-          <h4 class="text-sm font-semibold text-slate-200">Transcript Polishing Not Run</h4>
-          <p class="text-xs text-slate-400 leading-relaxed">
-            Polish this transcript to fix punctuation, remove filler words ("um", "uh"), and improve grammar using your selected AI model.
-          </p>
-        </div>
-        <div class="pt-2">
-          <button id="ondemand-polish-btn" class="px-5 py-2.5 rounded-xl text-xs font-semibold bg-gradient-to-r from-indigo-600 to-violet-600 hover:from-indigo-500 hover:to-violet-500 text-white shadow-lg shadow-indigo-600/25 flex items-center justify-center gap-2 mx-auto transition-all">
-            <i data-lucide="sparkles" class="w-4 h-4"></i> Polish Transcript Now
-          </button>
-        </div>
+        <button id="ondemand-polish-btn" class="flex-shrink-0 px-3.5 py-1.5 rounded-lg text-xs font-semibold bg-gradient-to-r from-indigo-600 to-violet-600 hover:from-indigo-500 hover:to-violet-500 text-white shadow-sm flex items-center justify-center gap-1.5 transition-all">
+          <i data-lucide="sparkles" class="w-3.5 h-3.5"></i> Polish Now
+        </button>
       </div>
     `;
   }
 
   function renderOnDemandSummaryCard() {
     return `
-      <div class="py-8 px-4 text-center max-w-lg mx-auto space-y-4">
-        <div class="w-12 h-12 rounded-2xl bg-indigo-500/10 border border-indigo-500/20 text-indigo-400 flex items-center justify-center mx-auto shadow-inner">
-          <i data-lucide="list-collapse" class="w-6 h-6"></i>
-        </div>
-        <div class="space-y-1">
-          <h4 class="text-sm font-semibold text-slate-200">AI Summary Not Run</h4>
-          <p class="text-xs text-slate-400 leading-relaxed">
-            Choose a detail level and generate an AI summary from this transcript:
-          </p>
-        </div>
-        <div class="grid grid-cols-2 sm:grid-cols-4 gap-2 pt-1 text-xs">
-          <button type="button" data-ondemand-level="tldr" class="ondemand-level-chip py-1.5 px-2 rounded-lg border border-slate-700 bg-slate-900 text-slate-300 transition-all">TL;DR</button>
-          <button type="button" data-ondemand-level="bullets" class="ondemand-level-chip active py-1.5 px-2 rounded-lg border border-indigo-500 bg-indigo-500/10 text-indigo-400 font-medium transition-all">Key Points</button>
-          <button type="button" data-ondemand-level="detailed" class="ondemand-level-chip py-1.5 px-2 rounded-lg border border-slate-700 bg-slate-900 text-slate-300 transition-all">Detailed</button>
-          <button type="button" data-ondemand-level="action_items" class="ondemand-level-chip py-1.5 px-2 rounded-lg border border-slate-700 bg-slate-900 text-slate-300 transition-all">Action Items</button>
-        </div>
-        <div class="pt-2">
-          <button id="ondemand-summary-btn" class="px-5 py-2.5 rounded-xl text-xs font-semibold bg-gradient-to-r from-indigo-600 to-violet-600 hover:from-indigo-500 hover:to-violet-500 text-white shadow-lg shadow-indigo-600/25 flex items-center justify-center gap-2 mx-auto transition-all">
-            <i data-lucide="list-collapse" class="w-4 h-4"></i> Generate Summary Now
+      <div class="space-y-3 p-1">
+        <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+          <div class="flex items-center gap-3">
+            <div class="w-8 h-8 rounded-lg bg-indigo-500/10 border border-indigo-500/20 text-indigo-400 flex items-center justify-center flex-shrink-0">
+              <i data-lucide="list-collapse" class="w-4 h-4"></i>
+            </div>
+            <div>
+              <h4 class="text-xs font-semibold text-slate-200">AI Summary Not Run</h4>
+              <p class="text-[11px] text-slate-400 mt-0.5">Choose a detail format and generate an AI summary from this transcript.</p>
+            </div>
+          </div>
+          <button id="ondemand-summary-btn" class="flex-shrink-0 px-3.5 py-1.5 rounded-lg text-xs font-semibold bg-gradient-to-r from-indigo-600 to-violet-600 hover:from-indigo-500 hover:to-violet-500 text-white shadow-sm flex items-center justify-center gap-1.5 transition-all">
+            <i data-lucide="list-collapse" class="w-3.5 h-3.5"></i> Generate Summary
           </button>
+        </div>
+        <div class="flex items-center gap-1.5 pt-2 border-t border-slate-800/80 text-xs">
+          <span class="text-[11px] text-slate-500 mr-1">Format:</span>
+          <button type="button" data-ondemand-level="tldr" class="ondemand-level-chip py-1 px-2.5 rounded-md border border-slate-800 bg-slate-950 text-slate-400 text-[11px] hover:border-slate-700 transition-all">TL;DR</button>
+          <button type="button" data-ondemand-level="bullets" class="ondemand-level-chip active py-1 px-2.5 rounded-md border border-indigo-500/60 bg-indigo-500/15 text-indigo-300 text-[11px] font-medium transition-all">Key Points</button>
+          <button type="button" data-ondemand-level="detailed" class="ondemand-level-chip py-1 px-2.5 rounded-md border border-slate-800 bg-slate-950 text-slate-400 text-[11px] hover:border-slate-700 transition-all">Detailed</button>
+          <button type="button" data-ondemand-level="action_items" class="ondemand-level-chip py-1 px-2.5 rounded-md border border-slate-800 bg-slate-950 text-slate-400 text-[11px] hover:border-slate-700 transition-all">Action Items</button>
         </div>
       </div>
     `;
@@ -1622,6 +1804,7 @@ document.addEventListener("DOMContentLoaded", () => {
     loadDemoData();
   }
 
+  applyStoredPreferences();
   checkSystemStatus();
   updateWhisperModels();
 });
