@@ -6,6 +6,7 @@ vLLM, Ollama-proxy, and any endpoint following the standard /chat/completions sc
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import time
@@ -166,27 +167,53 @@ class OpenAICompatibleLLMProvider(BaseLLMProvider):
         }
 
         timeout = httpx.Timeout(120.0, connect=10.0)
-        async with httpx.AsyncClient(timeout=timeout) as client:
-            async with client.stream("POST", url, headers=headers, json=payload) as response:
-                if response.status_code != 200:
-                    err_body = await response.aread()
-                    raise RuntimeError(
-                        f"{self.display_name} error (HTTP {response.status_code}): {err_body.decode(errors='ignore')}"
-                    )
+        max_retries = 3
 
-                async for line in response.aiter_lines():
-                    if line.startswith("data: "):
-                        data_str = line[6:].strip()
-                        if data_str == "[DONE]":
-                            break
-                        try:
-                            chunk = json.loads(data_str)
-                            delta = chunk.get("choices", [{}])[0].get("delta", {})
-                            token = delta.get("content", "")
-                            if token:
-                                yield token
-                        except Exception:
+        for attempt in range(max_retries):
+            try:
+                async with httpx.AsyncClient(timeout=timeout) as client:
+                    async with client.stream("POST", url, headers=headers, json=payload) as response:
+                        if response.status_code in (429, 503) and attempt < max_retries - 1:
+                            err_body = await response.aread()
+                            logger.warning(
+                                "%s returned HTTP %d on attempt %d/%d ('%s'). Retrying in %.1fs...",
+                                self.display_name,
+                                response.status_code,
+                                attempt + 1,
+                                max_retries,
+                                err_body.decode(errors="ignore")[:80],
+                                1.5 * (attempt + 1),
+                            )
+                            await asyncio.sleep(1.5 * (attempt + 1))
                             continue
+
+                        if response.status_code != 200:
+                            err_body = await response.aread()
+                            raise RuntimeError(
+                                f"{self.display_name} error (HTTP {response.status_code}): {err_body.decode(errors='ignore')}"
+                            )
+
+                        async for line in response.aiter_lines():
+                            if line.startswith("data: "):
+                                data_str = line[6:].strip()
+                                if data_str == "[DONE]":
+                                    break
+                                try:
+                                    chunk = json.loads(data_str)
+                                    delta = chunk.get("choices", [{}])[0].get("delta", {})
+                                    token = delta.get("content", "")
+                                    if token:
+                                        yield token
+                                except Exception:
+                                    continue
+                        # If streamed successfully, terminate method
+                        return
+
+            except httpx.RequestError as exc:
+                if attempt < max_retries - 1:
+                    await asyncio.sleep(1.5 * (attempt + 1))
+                    continue
+                raise RuntimeError(f"{self.display_name} connection error: {exc}")
 
     async def test_connection(self) -> dict[str, Any]:
         """Test authentication and connectivity to remote provider."""
