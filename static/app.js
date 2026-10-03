@@ -326,6 +326,7 @@ document.addEventListener("DOMContentLoaded", () => {
           llmModelSelect.appendChild(opt);
         }
       }
+      updateOnDemandModelLabels();
     } catch (e) {
       console.error("Failed to load LLM models", e);
     }
@@ -410,6 +411,7 @@ document.addEventListener("DOMContentLoaded", () => {
     const models = prefs.llm_models || {};
     models[provider] = model;
     savePreference("llm_models", models);
+    updateOnDemandModelLabels();
   });
 
   refreshModelsBtn.addEventListener("click", loadLlmModels);
@@ -1226,7 +1228,7 @@ document.addEventListener("DOMContentLoaded", () => {
   function renderAiUnavailableNotice(actionName, warning) {
     const detail = warning || "Ollama or OpenAI-compatible AI processor was not running or configured.";
     return `
-      <div class="p-5 rounded-xl border border-amber-500/30 bg-amber-500/10 text-slate-200 space-y-3">
+      <div class="whitespace-normal p-5 rounded-xl border border-amber-500/30 bg-amber-500/10 text-slate-200 space-y-3">
         <div class="flex items-center gap-2 font-medium text-sm text-amber-400">
           <svg class="w-4 h-4 text-amber-400 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/>
@@ -1245,48 +1247,76 @@ document.addEventListener("DOMContentLoaded", () => {
     `;
   }
 
+  function getActiveLlmDisplayInfo() {
+    const providerOpt = llmProviderSelect ? llmProviderSelect.options[llmProviderSelect.selectedIndex] : null;
+    let providerName = providerOpt ? providerOpt.text.replace(/\s*\(.*?\)/, "").trim() : "AI";
+    let modelName = (llmModelSelect && llmModelSelect.value) || "default";
+    return { providerName, modelName };
+  }
+
+  function updateOnDemandModelLabels() {
+    const { providerName, modelName } = getActiveLlmDisplayInfo();
+    const polishLabel = document.getElementById("ondemand-polish-model-text");
+    if (polishLabel) polishLabel.innerHTML = `${providerName} &bull; ${modelName}`;
+    const summaryLabel = document.getElementById("ondemand-summary-model-text");
+    if (summaryLabel) summaryLabel.innerHTML = `${providerName} &bull; ${modelName}`;
+  }
+
   function renderOnDemandPolishCard() {
+    const { providerName, modelName } = getActiveLlmDisplayInfo();
     return `
-      <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-1">
-        <div class="flex items-center gap-3">
-          <div class="w-8 h-8 rounded-lg bg-indigo-500/10 border border-indigo-500/20 text-indigo-400 flex items-center justify-center flex-shrink-0">
-            <i data-lucide="sparkles" class="w-4 h-4"></i>
-          </div>
-          <div>
-            <h4 class="text-xs font-semibold text-slate-200">Transcript Polishing Not Run</h4>
-            <p class="text-[11px] text-slate-400 mt-0.5">Clean up grammar, fix punctuation, and remove filler words using your selected AI model.</p>
-          </div>
+      <div class="whitespace-normal py-10 px-4 max-w-lg mx-auto text-center space-y-4">
+        <div class="w-14 h-14 rounded-2xl bg-gradient-to-b from-indigo-500/20 to-purple-500/10 border border-indigo-500/30 text-indigo-400 flex items-center justify-center mx-auto shadow-lg shadow-indigo-500/10">
+          <i data-lucide="sparkles" class="w-7 h-7"></i>
         </div>
-        <button id="ondemand-polish-btn" class="flex-shrink-0 px-3.5 py-1.5 rounded-lg text-xs font-semibold bg-gradient-to-r from-indigo-600 to-violet-600 hover:from-indigo-500 hover:to-violet-500 text-white shadow-sm flex items-center justify-center gap-1.5 transition-all">
-          <i data-lucide="sparkles" class="w-3.5 h-3.5"></i> Polish Now
-        </button>
+        <div class="space-y-1.5">
+          <h3 class="text-base font-semibold text-slate-100">Polish Transcript with AI</h3>
+          <p class="text-xs text-slate-400 leading-relaxed max-w-md mx-auto">
+            Clean up grammar, fix punctuation, and remove filler words while preserving every speaker's original voice and meaning.
+          </p>
+        </div>
+        <div class="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-slate-900/80 border border-slate-800 text-[11px] text-slate-400">
+          <span class="w-1.5 h-1.5 rounded-full bg-indigo-400 animate-pulse"></span>
+          <span>Ready with <strong id="ondemand-polish-model-text" class="text-slate-200 font-medium">${providerName} &bull; ${modelName}</strong></span>
+        </div>
+        <div class="pt-2">
+          <button id="ondemand-polish-btn" class="px-6 py-2.5 rounded-xl text-sm font-semibold bg-gradient-to-r from-indigo-600 via-indigo-500 to-violet-600 hover:from-indigo-500 hover:to-violet-500 text-white shadow-lg shadow-indigo-600/30 hover:shadow-indigo-600/50 flex items-center justify-center gap-2 mx-auto transition-all active:scale-[0.98]">
+            <i data-lucide="sparkles" class="w-4 h-4"></i>
+            <span>Polish Transcript Now</span>
+          </button>
+        </div>
       </div>
     `;
   }
 
   function renderOnDemandSummaryCard() {
+    const { providerName, modelName } = getActiveLlmDisplayInfo();
     return `
-      <div class="space-y-3 p-1">
-        <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-          <div class="flex items-center gap-3">
-            <div class="w-8 h-8 rounded-lg bg-indigo-500/10 border border-indigo-500/20 text-indigo-400 flex items-center justify-center flex-shrink-0">
-              <i data-lucide="list-collapse" class="w-4 h-4"></i>
-            </div>
-            <div>
-              <h4 class="text-xs font-semibold text-slate-200">AI Summary Not Run</h4>
-              <p class="text-[11px] text-slate-400 mt-0.5">Choose a detail format and generate an AI summary from this transcript.</p>
-            </div>
-          </div>
-          <button id="ondemand-summary-btn" class="flex-shrink-0 px-3.5 py-1.5 rounded-lg text-xs font-semibold bg-gradient-to-r from-indigo-600 to-violet-600 hover:from-indigo-500 hover:to-violet-500 text-white shadow-sm flex items-center justify-center gap-1.5 transition-all">
-            <i data-lucide="list-collapse" class="w-3.5 h-3.5"></i> Generate Summary
-          </button>
+      <div class="whitespace-normal py-10 px-4 max-w-lg mx-auto text-center space-y-4">
+        <div class="w-14 h-14 rounded-2xl bg-gradient-to-b from-indigo-500/20 to-purple-500/10 border border-indigo-500/30 text-indigo-400 flex items-center justify-center mx-auto shadow-lg shadow-indigo-500/10">
+          <i data-lucide="list-collapse" class="w-7 h-7"></i>
         </div>
-        <div class="flex items-center gap-1.5 pt-2 border-t border-slate-800/80 text-xs">
-          <span class="text-[11px] text-slate-500 mr-1">Format:</span>
-          <button type="button" data-ondemand-level="tldr" class="ondemand-level-chip py-1 px-2.5 rounded-md border border-slate-800 bg-slate-950 text-slate-400 text-[11px] hover:border-slate-700 transition-all">TL;DR</button>
-          <button type="button" data-ondemand-level="bullets" class="ondemand-level-chip active py-1 px-2.5 rounded-md border border-indigo-500/60 bg-indigo-500/15 text-indigo-300 text-[11px] font-medium transition-all">Key Points</button>
-          <button type="button" data-ondemand-level="detailed" class="ondemand-level-chip py-1 px-2.5 rounded-md border border-slate-800 bg-slate-950 text-slate-400 text-[11px] hover:border-slate-700 transition-all">Detailed</button>
-          <button type="button" data-ondemand-level="action_items" class="ondemand-level-chip py-1 px-2.5 rounded-md border border-slate-800 bg-slate-950 text-slate-400 text-[11px] hover:border-slate-700 transition-all">Action Items</button>
+        <div class="space-y-1.5">
+          <h3 class="text-base font-semibold text-slate-100">Generate AI Summary</h3>
+          <p class="text-xs text-slate-400 leading-relaxed max-w-md mx-auto">
+            Choose a detail format below and distill the raw transcript into key takeaways or clear action items.
+          </p>
+        </div>
+        <div class="flex flex-wrap items-center justify-center gap-1.5 pt-1">
+          <button type="button" data-ondemand-level="tldr" class="ondemand-level-chip py-1.5 px-3 rounded-lg border ${ondemandSummaryActiveLevel === "tldr" ? "border-indigo-500/60 bg-indigo-500/15 text-indigo-300 font-medium active" : "border-slate-800 bg-slate-950 text-slate-400 hover:border-slate-700"} text-xs transition-all">TL;DR</button>
+          <button type="button" data-ondemand-level="bullets" class="ondemand-level-chip ${ondemandSummaryActiveLevel === "bullets" ? "border-indigo-500/60 bg-indigo-500/15 text-indigo-300 font-medium active" : "border-slate-800 bg-slate-950 text-slate-400 hover:border-slate-700"} py-1.5 px-3 rounded-lg border text-xs transition-all">Key Points</button>
+          <button type="button" data-ondemand-level="detailed" class="ondemand-level-chip ${ondemandSummaryActiveLevel === "detailed" ? "border-indigo-500/60 bg-indigo-500/15 text-indigo-300 font-medium active" : "border-slate-800 bg-slate-950 text-slate-400 hover:border-slate-700"} py-1.5 px-3 rounded-lg border text-xs transition-all">Detailed</button>
+          <button type="button" data-ondemand-level="action_items" class="ondemand-level-chip ${ondemandSummaryActiveLevel === "action_items" ? "border-indigo-500/60 bg-indigo-500/15 text-indigo-300 font-medium active" : "border-slate-800 bg-slate-950 text-slate-400 hover:border-slate-700"} py-1.5 px-3 rounded-lg border text-xs transition-all">Action Items</button>
+        </div>
+        <div class="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-slate-900/80 border border-slate-800 text-[11px] text-slate-400">
+          <span class="w-1.5 h-1.5 rounded-full bg-indigo-400 animate-pulse"></span>
+          <span>Ready with <strong id="ondemand-summary-model-text" class="text-slate-200 font-medium">${providerName} &bull; ${modelName}</strong></span>
+        </div>
+        <div class="pt-2">
+          <button id="ondemand-summary-btn" class="px-6 py-2.5 rounded-xl text-sm font-semibold bg-gradient-to-r from-indigo-600 via-indigo-500 to-violet-600 hover:from-indigo-500 hover:to-violet-500 text-white shadow-lg shadow-indigo-600/30 hover:shadow-indigo-600/50 flex items-center justify-center gap-2 mx-auto transition-all active:scale-[0.98]">
+            <i data-lucide="list-collapse" class="w-4 h-4"></i>
+            <span>Generate Summary Now</span>
+          </button>
         </div>
       </div>
     `;
@@ -1311,11 +1341,11 @@ document.addEventListener("DOMContentLoaded", () => {
     chips.forEach((c) => {
       c.addEventListener("click", () => {
         chips.forEach((x) => {
-          x.classList.remove("active", "border-indigo-500", "bg-indigo-500/10", "text-indigo-400", "font-medium");
-          x.classList.add("border-slate-700", "bg-slate-900", "text-slate-300");
+          x.classList.remove("active", "border-indigo-500/60", "bg-indigo-500/15", "text-indigo-300", "font-medium");
+          x.classList.add("border-slate-800", "bg-slate-950", "text-slate-400");
         });
-        c.classList.add("active", "border-indigo-500", "bg-indigo-500/10", "text-indigo-400", "font-medium");
-        c.classList.remove("border-slate-700", "bg-slate-900", "text-slate-300");
+        c.classList.add("active", "border-indigo-500/60", "bg-indigo-500/15", "text-indigo-300", "font-medium");
+        c.classList.remove("border-slate-800", "bg-slate-950", "text-slate-400");
         ondemandSummaryActiveLevel = c.getAttribute("data-ondemand-level");
       });
     });
@@ -1341,8 +1371,8 @@ document.addEventListener("DOMContentLoaded", () => {
         tabBadgePolish.classList.remove("hidden");
         if (polishToolbar) polishToolbar.classList.remove("hidden");
       } else {
-        tabBadgePolish.textContent = "+ Polish";
-        tabBadgePolish.className = "text-[10px] px-1.5 py-0.5 rounded-full font-medium bg-slate-800 text-slate-400 border border-slate-700/60";
+        tabBadgePolish.textContent = "Not run";
+        tabBadgePolish.className = "text-[10px] px-1.5 py-0.5 rounded-full font-medium bg-slate-800/80 text-slate-400 border border-slate-700/60";
         tabBadgePolish.classList.remove("hidden");
         if (polishToolbar) polishToolbar.classList.add("hidden");
       }
@@ -1355,8 +1385,8 @@ document.addEventListener("DOMContentLoaded", () => {
         tabBadgeSummary.classList.remove("hidden");
         if (summaryToolbar) summaryToolbar.classList.remove("hidden");
       } else {
-        tabBadgeSummary.textContent = "+ Summary";
-        tabBadgeSummary.className = "text-[10px] px-1.5 py-0.5 rounded-full font-medium bg-slate-800 text-slate-400 border border-slate-700/60";
+        tabBadgeSummary.textContent = "Not run";
+        tabBadgeSummary.className = "text-[10px] px-1.5 py-0.5 rounded-full font-medium bg-slate-800/80 text-slate-400 border border-slate-700/60";
         tabBadgeSummary.classList.remove("hidden");
         if (summaryToolbar) summaryToolbar.classList.add("hidden");
       }
@@ -1378,23 +1408,31 @@ document.addEventListener("DOMContentLoaded", () => {
       resTabPolish.classList.add("active", "text-indigo-400", "bg-indigo-500/10");
       resTabPolish.classList.remove("text-slate-400");
       viewportPolish.classList.remove("hidden");
-      if (currentResult.polished && currentResult.polished.trim()) {
-        polishContent.textContent = currentResult.polished;
-        if (polishToolbar) polishToolbar.classList.remove("hidden");
-      } else if (!polishContent.textContent.trim()) {
-        polishContent.innerHTML = renderOnDemandPolishCard();
-        attachOnDemandPolishListeners();
+      const isStreaming = !!document.getElementById("polish-streaming-target");
+      if (!isStreaming) {
+        if (currentResult.polished && currentResult.polished.trim()) {
+          polishContent.textContent = currentResult.polished;
+          if (polishToolbar) polishToolbar.classList.remove("hidden");
+        } else {
+          polishContent.innerHTML = renderOnDemandPolishCard();
+          attachOnDemandPolishListeners();
+          if (polishToolbar) polishToolbar.classList.add("hidden");
+        }
       }
     } else if (tabName === "summary") {
       resTabSummary.classList.add("active", "text-indigo-400", "bg-indigo-500/10");
       resTabSummary.classList.remove("text-slate-400");
       viewportSummary.classList.remove("hidden");
-      if (currentResult.summary && currentResult.summary.trim()) {
-        summaryContent.innerHTML = typeof marked !== "undefined" ? marked.parse(currentResult.summary) : currentResult.summary;
-        if (summaryToolbar) summaryToolbar.classList.remove("hidden");
-      } else if (!summaryContent.textContent.trim()) {
-        summaryContent.innerHTML = renderOnDemandSummaryCard();
-        attachOnDemandSummaryListeners();
+      const isStreaming = !!document.getElementById("summary-streaming-target");
+      if (!isStreaming) {
+        if (currentResult.summary && currentResult.summary.trim()) {
+          summaryContent.innerHTML = typeof marked !== "undefined" ? marked.parse(currentResult.summary) : currentResult.summary;
+          if (summaryToolbar) summaryToolbar.classList.remove("hidden");
+        } else {
+          summaryContent.innerHTML = renderOnDemandSummaryCard();
+          attachOnDemandSummaryListeners();
+          if (summaryToolbar) summaryToolbar.classList.add("hidden");
+        }
       }
     }
     if (typeof lucide !== "undefined") lucide.createIcons();
@@ -1785,9 +1823,24 @@ document.addEventListener("DOMContentLoaded", () => {
     if (typeof marked !== "undefined") {
       summaryContent.innerHTML = marked.parse(demoResult.summary);
     }
-    polishContent.textContent = demoResult.polished;
 
     const urlParams = new URLSearchParams(window.location.search);
+    if (urlParams.get("unready") === "polish" || urlParams.get("unready") === "1") {
+      demoResult.polished = "";
+      currentResult.polished = "";
+      polishContent.textContent = "";
+    } else {
+      polishContent.textContent = demoResult.polished;
+    }
+
+    if (urlParams.get("unready") === "summary") {
+      demoResult.summary = "";
+      currentResult.summary = "";
+      summaryContent.textContent = "";
+    }
+
+    updateResultTabStates();
+
     if (urlParams.get("tab") === "summary") {
       switchResultTab("summary");
     } else if (urlParams.get("tab") === "polish") {
