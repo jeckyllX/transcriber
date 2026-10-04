@@ -149,6 +149,7 @@ class JobManager:
         llm_provider: str = "ollama",
         llm_model: str | None = None,
         notify: bool = False,
+        clean_audio: bool = False,
     ) -> None:
         job = self.get_job(job_id)
         if not job:
@@ -161,7 +162,15 @@ class JobManager:
         try:
             async with self.semaphore:
                 # 1. Convert audio
-                self.update_status(job_id, "converting", 15, "Decoding audio with FFmpeg...")
+                if clean_audio:
+                    self.update_status(
+                        job_id,
+                        "converting",
+                        15,
+                        "Converting and enhancing audio (noise reduction & leveling)...",
+                    )
+                else:
+                    self.update_status(job_id, "converting", 15, "Decoding audio with FFmpeg...")
                 transcriber = transcriber_factory.get_transcriber(whisper_engine)
 
                 from config import settings
@@ -170,10 +179,14 @@ class JobManager:
                 use_memory = settings.use_in_memory_pcm and HAS_NUMPY and whisper_engine == "faster-whisper"
 
                 if use_memory:
-                    audio_input, metadata = audio_processor.convert_to_pcm_array(media_path)
+                    audio_input, metadata = audio_processor.convert_to_pcm_array(
+                        media_path, enhance_audio=clean_audio
+                    )
                 else:
                     converted_wav = media_path.parent / f"{job_id}_16k.wav"
-                    audio_input = audio_processor.convert_to_whisper_wav(media_path, converted_wav)
+                    audio_input = audio_processor.convert_to_whisper_wav(
+                        media_path, converted_wav, enhance_audio=clean_audio
+                    )
                     metadata = audio_processor.probe_media(media_path)
 
                 job.duration = metadata.duration
@@ -245,6 +258,7 @@ class JobManager:
                 "segments": [s.model_dump() for s in transcription_result.segments],
                 "polished": None,
                 "summary": None,
+                "audio_enhanced": clean_audio,
             }
 
             # 3. AI Post-Processing (gracefully degraded if LLM provider is offline)

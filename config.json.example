@@ -12,6 +12,9 @@
     "models_dir": null,
     "use_in_memory_pcm": true
   },
+  "audio": {
+    "enhancement_filter": "highpass=f=80,afftdn=nf=-25,loudnorm=I=-16:TP=-1.5:LRA=11"
+  },
   "diarization": {
     "enabled": true,
     "seg_model": "sherpa-onnx-pyannote-segmentation-3-0/model.onnx",

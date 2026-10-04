@@ -10,7 +10,7 @@ Audio and video transcription tool powered by Whisper, ONNX speaker diarization,
 
 ## Features
 
-- **Audio Ingestion & Conversion**: Ingests `.mp3`, `.wav`, `.m4a`, `.ogg`, `.flac`, `.aac`, `.opus`, `.webm`, `.mp4`, `.mkv`, etc., and standardizes to 16,000 Hz, 1-channel mono, 16-bit PCM WAV via FFmpeg.
+- **Audio Ingestion & Preprocessing**: Ingests `.mp3`, `.wav`, `.m4a`, `.ogg`, `.flac`, `.aac`, `.opus`, `.webm`, `.mp4`, `.mkv`, etc., and standardizes to 16,000 Hz, 1-channel mono, 16-bit PCM WAV via FFmpeg. Includes optional audio enhancement (noise reduction via `afftdn`, low-frequency rumble removal via `highpass`, and volume leveling via `loudnorm`) with automatic fallback.
 - **Whisper Transcription Engine**:
   - `faster-whisper` (CTranslate2 with CPU `int8` quantization).
   - `whisper.cpp` standalone C++ binary runner with SHA256 verification and compilation fallback.
@@ -84,6 +84,7 @@ cp config.json.example config.json
 | `TELEGRAM_CHAT_ID` | | Target Chat or Channel ID |
 | `WEBHOOK_ENABLED` | `false` | Enable generic Webhook dispatch |
 | `WEBHOOK_URL` | | HTTP POST endpoint for notifications |
+| `AUDIO_ENHANCEMENT_FILTER` | `highpass=f=80,afftdn=nf=-25,loudnorm=I=-16:TP=-1.5:LRA=11` | FFmpeg audio filter chain for noise reduction and loudness normalization |
 
 ---
 
@@ -145,7 +146,7 @@ transcriber/
 ├── static/
 │   ├── app.js                 # UI controller, mic recording, SSE streams, live dictation
 │   └── style.css              # Custom CSS
-└── tests/                     # 50 automated tests covering all subsystems
+└── tests/                     # 55 automated tests covering all subsystems
 ```
 
 ---

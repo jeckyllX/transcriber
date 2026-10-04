@@ -269,6 +269,7 @@ async def create_background_job(
     llm_provider: str = Form(default="ollama"),
     llm_model: str | None = Form(default=None),
     notify: bool = Form(default=False),
+    clean_audio: bool = Form(default=False),
 ):
     """Submit an audio file for asynchronous processing.
 
@@ -298,6 +299,7 @@ async def create_background_job(
             llm_provider=llm_provider,
             llm_model=llm_model,
             notify=notify,
+            clean_audio=clean_audio,
         )
     )
 
@@ -487,6 +489,7 @@ async def transcribe_audio(
     vad_filter: bool = Form(default=True),
     enable_diarization: bool = Form(default=False),
     num_speakers: int = Form(default=-1),
+    clean_audio: bool = Form(default=False),
 ):
     """Upload audio/video file, decode via in-memory PCM or WAV, and transcribe."""
     task_id = str(uuid.uuid4())[:8]
@@ -504,10 +507,14 @@ async def transcribe_audio(
         use_memory = settings.use_in_memory_pcm and HAS_NUMPY and whisper_engine == "faster-whisper"
 
         if use_memory:
-            audio_input, metadata = audio_processor.convert_to_pcm_array(temp_upload)
+            audio_input, metadata = audio_processor.convert_to_pcm_array(
+                temp_upload, enhance_audio=clean_audio
+            )
         else:
             converted_wav = UPLOADS_DIR / f"{task_id}_16k.wav"
-            audio_input = audio_processor.convert_to_whisper_wav(temp_upload, converted_wav)
+            audio_input = audio_processor.convert_to_whisper_wav(
+                temp_upload, converted_wav, enhance_audio=clean_audio
+            )
             metadata = audio_processor.probe_media(temp_upload)
 
         result = transcriber.transcribe(
@@ -538,6 +545,7 @@ async def transcribe_audio(
             "processing_time": elapsed,
             "engine_used": transcriber.name,
             "model_used": whisper_model,
+            "audio_enhanced": clean_audio,
             "language": result.language,
             "num_speakers": num_speakers_detected,
             "speaker_turns": result.get_speaker_turns(),

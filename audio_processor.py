@@ -39,12 +39,25 @@ class AudioProcessorError(Exception):
     pass
 
 
+DEFAULT_ENHANCEMENT_FILTER: str = "highpass=f=80,afftdn=nf=-25,loudnorm=I=-16:TP=-1.5:LRA=11"
+
+
 class AudioProcessor:
     """Universal audio converter and validator using FFmpeg."""
 
-    def __init__(self, ffmpeg_bin: str | None = None, ffprobe_bin: str | None = None):
+    def __init__(
+        self,
+        ffmpeg_bin: str | None = None,
+        ffprobe_bin: str | None = None,
+        enhancement_filter: str | None = None,
+    ):
         self.ffmpeg_bin = ffmpeg_bin or settings.ffmpeg_bin or "ffmpeg"
         self.ffprobe_bin = ffprobe_bin or settings.ffprobe_bin or "ffprobe"
+        self.enhancement_filter = (
+            enhancement_filter
+            or getattr(settings, "audio_enhancement_filter", None)
+            or DEFAULT_ENHANCEMENT_FILTER
+        )
 
     def probe_media(self, file_path: Path) -> AudioMetadata:
         """Probe media file properties using ffprobe with ffmpeg fallback."""
@@ -128,36 +141,55 @@ class AudioProcessor:
             size_bytes=file_path.stat().st_size,
         )
 
-    def convert_to_pcm_array(self, input_path: Path) -> tuple[Any, AudioMetadata]:
-        """Stream decoded audio directly from FFmpeg stdout into a normalized float32 NumPy array.
-
-        Requires numpy. If numpy is unavailable, use convert_to_whisper_wav.
-        """
-        if not HAS_NUMPY or np is None:
-            raise AudioProcessorError("NumPy is not installed. Use file-based convert_to_whisper_wav instead.")
+    def convert_to_pcm_array(
+        self,
+        input_path: Path,
+        enhance_audio: bool = False,
+    ) -> tuple[Any, AudioMetadata]:
         """Stream decoded audio directly from FFmpeg stdout into a normalized float32 NumPy array.
 
         Eliminates intermediate disk writes for engines supporting in-memory buffers.
+        When enhance_audio=True, applies high-pass rumble removal, adaptive FFT noise reduction,
+        and EBU R128 loudness normalization before streaming.
         """
+        if not HAS_NUMPY or np is None:
+            raise AudioProcessorError("NumPy is not installed. Use file-based convert_to_whisper_wav instead.")
+
         input_path = Path(input_path).resolve()
         metadata = self.probe_media(input_path)
 
-        cmd = [
-            self.ffmpeg_bin,
-            "-y",
-            "-i", str(input_path),
-            "-vn",
-            "-ar", "16000",
-            "-ac", "1",
-            "-f", "s16le",
-            "-",
-        ]
+        def _execute_decode(with_filter: bool) -> bytes:
+            cmd = [
+                self.ffmpeg_bin,
+                "-y",
+                "-i", str(input_path),
+                "-vn",
+            ]
+            if with_filter and self.enhancement_filter:
+                cmd.extend(["-af", self.enhancement_filter])
+            cmd.extend([
+                "-ar", "16000",
+                "-ac", "1",
+                "-f", "s16le",
+                "-",
+            ])
+            proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            raw, err = proc.communicate()
+            if proc.returncode != 0:
+                raise AudioProcessorError(f"FFmpeg streaming decode failed: {err.decode(errors='ignore')}")
+            return raw
 
-        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        raw_pcm, stderr_data = proc.communicate()
-
-        if proc.returncode != 0:
-            raise AudioProcessorError(f"FFmpeg streaming decode failed: {stderr_data.decode(errors='ignore')}")
+        try:
+            raw_pcm = _execute_decode(with_filter=enhance_audio)
+        except AudioProcessorError as e:
+            if enhance_audio:
+                logger.warning(
+                    "FFmpeg audio enhancement failed (%s); falling back to standard decode without filter.",
+                    e,
+                )
+                raw_pcm = _execute_decode(with_filter=False)
+            else:
+                raise
 
         if not raw_pcm:
             raise AudioProcessorError("Decoded audio stream is empty.")
@@ -170,15 +202,21 @@ class AudioProcessor:
         self,
         input_path: Path,
         output_path: Path | None = None,
-        overwrite: bool = True
+        overwrite: bool = True,
+        enhance_audio: bool = False,
     ) -> Path:
-        """Convert input media to standard 16kHz mono 16-bit PCM WAV on disk."""
+        """Convert input media to standard 16kHz mono 16-bit PCM WAV on disk.
+
+        When enhance_audio=True, applies high-pass rumble removal, adaptive FFT noise reduction,
+        and EBU R128 loudness normalization.
+        """
         input_path = Path(input_path).resolve()
         if not input_path.is_file():
             raise AudioProcessorError(f"Input media file does not exist: {input_path}")
 
         if output_path is None:
-            output_path = input_path.parent / f"{input_path.stem}_whisper.wav"
+            suffix = "_enhanced.wav" if enhance_audio else "_whisper.wav"
+            output_path = input_path.parent / f"{input_path.stem}{suffix}"
         else:
             output_path = Path(output_path).resolve()
 
@@ -187,22 +225,39 @@ class AudioProcessor:
         if output_path.exists() and not overwrite:
             return output_path
 
-        cmd = [
-            self.ffmpeg_bin,
-            "-y" if overwrite else "-n",
-            "-i", str(input_path),
-            "-vn",
-            "-ar", "16000",
-            "-ac", "1",
-            "-c:a", "pcm_s16le",
-            str(output_path)
-        ]
+        def _execute_convert(with_filter: bool):
+            cmd = [
+                self.ffmpeg_bin,
+                "-y" if overwrite else "-n",
+                "-i", str(input_path),
+                "-vn",
+            ]
+            if with_filter and self.enhancement_filter:
+                cmd.extend(["-af", self.enhancement_filter])
+            cmd.extend([
+                "-ar", "16000",
+                "-ac", "1",
+                "-c:a", "pcm_s16le",
+                str(output_path),
+            ])
+            subprocess.run(cmd, capture_output=True, text=True, check=True)
 
         try:
-            subprocess.run(cmd, capture_output=True, text=True, check=True)
+            _execute_convert(with_filter=enhance_audio)
         except subprocess.CalledProcessError as e:
-            error_details = e.stderr or e.stdout or str(e)
-            raise AudioProcessorError(f"FFmpeg conversion failed: {error_details}") from e
+            if enhance_audio:
+                logger.warning(
+                    "FFmpeg audio enhancement filter failed (%s); retrying without filter.",
+                    e.stderr or str(e),
+                )
+                try:
+                    _execute_convert(with_filter=False)
+                except subprocess.CalledProcessError as fallback_err:
+                    error_details = fallback_err.stderr or fallback_err.stdout or str(fallback_err)
+                    raise AudioProcessorError(f"FFmpeg conversion failed: {error_details}") from fallback_err
+            else:
+                error_details = e.stderr or e.stdout or str(e)
+                raise AudioProcessorError(f"FFmpeg conversion failed: {error_details}") from e
 
         if not output_path.exists() or output_path.stat().st_size == 0:
             raise AudioProcessorError(f"Converted audio file is empty or missing: {output_path}")

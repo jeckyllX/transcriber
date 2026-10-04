@@ -281,6 +281,12 @@
             <label for="vad-checkbox" class="text-xs text-slate-300">Enable Voice Activity Detection (VAD) silence filtering</label>
           </div>
 
+          <!-- Audio Enhancement Toggle -->
+          <div class="flex items-center space-x-2 pt-1">
+            <input type="checkbox" id="clean-audio-checkbox" class="w-4 h-4 rounded text-indigo-600 bg-slate-950 border-slate-700 focus:ring-indigo-500">
+            <label for="clean-audio-checkbox" class="text-xs text-slate-300 cursor-pointer">Enable audio enhancement (noise reduction &amp; loudness normalization)</label>
+          </div>
+
           <!-- Primary Action Button -->
           <button id="start-process-btn" class="w-full py-3 px-4 rounded-xl font-medium text-sm bg-gradient-to-r from-indigo-600 to-violet-600 hover:from-indigo-500 hover:to-violet-500 text-white shadow-lg shadow-indigo-600/30 transition-all flex items-center justify-center gap-2">
             <i data-lucide="play" class="w-4 h-4"></i> Start Transcription & Processing

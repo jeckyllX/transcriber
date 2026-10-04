@@ -66,6 +66,7 @@ _notif_cfg = _cfg.get("notifications", {})
 _telegram_cfg = _notif_cfg.get("telegram", {})
 _webhook_cfg = _notif_cfg.get("webhook", {})
 _diarization_cfg = _cfg.get("diarization", {})
+_audio_cfg = _cfg.get("audio", {})
 
 
 class Settings(BaseModel):
@@ -108,6 +109,13 @@ class Settings(BaseModel):
     )
     ffprobe_bin: str | None = Field(
         default_factory=lambda: os.getenv("FFPROBE_BIN_PATH") or find_binary("ffprobe")
+    )
+    audio_enhancement_filter: str = Field(
+        default_factory=lambda: _audio_cfg.get("enhancement_filter")
+        or os.getenv(
+            "AUDIO_ENHANCEMENT_FILTER",
+            "highpass=f=80,afftdn=nf=-25,loudnorm=I=-16:TP=-1.5:LRA=11",
+        )
     )
 
     # LLM Provider - Ollama

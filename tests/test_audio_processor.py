@@ -71,3 +71,57 @@ def test_convert_to_pcm_array(synthetic_audio_files):
     assert pcm_array.dtype.name == "float32"
     assert len(pcm_array) > 0
     assert meta.duration > 1.0
+
+
+def test_convert_to_whisper_wav_with_enhancement(synthetic_audio_files, tmp_path: Path):
+    processor = AudioProcessor()
+    dest = tmp_path / "enhanced_whisper.wav"
+
+    converted = processor.convert_to_whisper_wav(
+        synthetic_audio_files["mp3"],
+        output_path=dest,
+        enhance_audio=True,
+    )
+    assert converted.exists()
+    assert converted.stat().st_size > 0
+
+    converted_meta = processor.probe_media(converted)
+    assert converted_meta.sample_rate == 16000
+    assert converted_meta.channels == 1
+    assert converted_meta.duration > 1.0
+
+
+def test_convert_to_pcm_array_with_enhancement(synthetic_audio_files):
+    processor = AudioProcessor()
+    pcm_array, meta = processor.convert_to_pcm_array(
+        synthetic_audio_files["mp3"],
+        enhance_audio=True,
+    )
+    assert pcm_array.ndim == 1
+    assert pcm_array.dtype.name == "float32"
+    assert len(pcm_array) > 0
+    assert meta.duration > 1.0
+
+
+def test_enhancement_graceful_fallback_on_invalid_filter(synthetic_audio_files, tmp_path: Path):
+    # An intentionally invalid filter syntax that FFmpeg will reject
+    processor = AudioProcessor(enhancement_filter="nonexistent_filter_xyz=999")
+    dest = tmp_path / "fallback.wav"
+
+    # Should not raise AudioProcessorError; must gracefully fall back to unfiltered conversion
+    converted = processor.convert_to_whisper_wav(
+        synthetic_audio_files["wav"],
+        output_path=dest,
+        enhance_audio=True,
+    )
+    assert converted.exists()
+    assert converted.stat().st_size > 0
+
+    # Also verify streaming PCM array fallback
+    pcm_array, meta = processor.convert_to_pcm_array(
+        synthetic_audio_files["wav"],
+        enhance_audio=True,
+    )
+    assert len(pcm_array) > 0
+    assert meta.duration > 0.5
+

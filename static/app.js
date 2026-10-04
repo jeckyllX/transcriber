@@ -26,6 +26,7 @@ document.addEventListener("DOMContentLoaded", () => {
   const whisperModelSelect = document.getElementById("whisper-model-select");
   const languageSelect = document.getElementById("language-select");
   const vadCheckbox = document.getElementById("vad-checkbox");
+  const cleanAudioCheckbox = document.getElementById("clean-audio-checkbox");
   const llmProviderSelect = document.getElementById("llm-provider-select");
   const llmModelSelect = document.getElementById("llm-model-select");
   const refreshModelsBtn = document.getElementById("refresh-models-btn");
@@ -209,6 +210,9 @@ document.addEventListener("DOMContentLoaded", () => {
     }
     if (prefs.vad_enabled !== undefined && vadCheckbox) {
       vadCheckbox.checked = Boolean(prefs.vad_enabled);
+    }
+    if (prefs.clean_audio_enabled !== undefined && cleanAudioCheckbox) {
+      cleanAudioCheckbox.checked = Boolean(prefs.clean_audio_enabled);
     }
     if (prefs.notify_enabled !== undefined && notifyCheckbox) {
       notifyCheckbox.checked = Boolean(prefs.notify_enabled);
@@ -431,6 +435,12 @@ document.addEventListener("DOMContentLoaded", () => {
   if (vadCheckbox) {
     vadCheckbox.addEventListener("change", () => {
       savePreference("vad_enabled", vadCheckbox.checked);
+    });
+  }
+
+  if (cleanAudioCheckbox) {
+    cleanAudioCheckbox.addEventListener("change", () => {
+      savePreference("clean_audio_enabled", cleanAudioCheckbox.checked);
     });
   }
 
@@ -889,6 +899,7 @@ document.addEventListener("DOMContentLoaded", () => {
       formData.append("whisper_model", whisperModelSelect.value);
       formData.append("language", languageSelect.value);
       formData.append("vad_filter", vadCheckbox ? vadCheckbox.checked : true);
+      formData.append("clean_audio", cleanAudioCheckbox ? cleanAudioCheckbox.checked : false);
       formData.append("enable_diarization", diarizationCheckbox ? diarizationCheckbox.checked : false);
       formData.append("num_speakers", numSpeakersSelect ? numSpeakersSelect.value : -1);
       formData.append("ai_action", activeAiAction);
