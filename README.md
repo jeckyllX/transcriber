@@ -85,6 +85,7 @@ cp config.json.example config.json
 | `WEBHOOK_ENABLED` | `false` | Enable generic Webhook dispatch |
 | `WEBHOOK_URL` | | HTTP POST endpoint for notifications |
 | `AUDIO_ENHANCEMENT_FILTER` | `highpass=f=80,afftdn=nf=-25,loudnorm=I=-16:TP=-1.5:LRA=11` | FFmpeg audio filter chain for noise reduction and loudness normalization |
+| `MODEL_IDLE_TIMEOUT_SECONDS` | `1800` | Idle timeout in seconds before unloading cached Whisper models (0 to disable) |
 
 ---
 
@@ -146,7 +147,7 @@ transcriber/
 ├── static/
 │   ├── app.js                 # UI controller, mic recording, SSE streams, live dictation
 │   └── style.css              # Custom CSS
-└── tests/                     # 55 automated tests covering all subsystems
+└── tests/                     # 60 automated tests covering all subsystems
 ```
 
 ---

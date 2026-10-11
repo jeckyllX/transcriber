@@ -10,7 +10,8 @@
     "default_model": "base",
     "bin_path": null,
     "models_dir": null,
-    "use_in_memory_pcm": true
+    "use_in_memory_pcm": true,
+    "model_idle_timeout_seconds": 1800
   },
   "audio": {
     "enhancement_filter": "highpass=f=80,afftdn=nf=-25,loudnorm=I=-16:TP=-1.5:LRA=11"

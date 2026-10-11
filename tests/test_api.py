@@ -122,3 +122,21 @@ def test_api_jobs_create_with_clean_audio():
         assert "job_id" in data
         assert data["status"] == "queued"
 
+
+def test_api_models_endpoints():
+    # Test GET /api/models/status
+    res = client.get("/api/models/status")
+    assert res.status_code == 200
+    data = res.json()
+    assert "idle_timeout_seconds" in data
+    assert "cached_models" in data
+
+    # Test POST /api/models/unload-idle
+    unload_res = client.post("/api/models/unload-idle")
+    assert unload_res.status_code == 200
+    unload_data = unload_res.json()
+    assert unload_data["status"] == "ok"
+    assert "unloaded" in unload_data
+    assert "remaining" in unload_data
+
+

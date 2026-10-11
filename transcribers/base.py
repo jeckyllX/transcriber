@@ -199,3 +199,16 @@ class BaseTranscriber(ABC):
     ) -> TranscriptionResult:
         """Perform audio transcription on 16kHz mono audio file or float32 NumPy array."""
         pass
+
+    def evict_idle_models(self, timeout_seconds: float | None = None) -> list[str]:
+        """Evict models that have been idle for >= timeout_seconds. Default no-op."""
+        return []
+
+    def unload_all_idle(self) -> list[str]:
+        """Unload all idle cached models. Default no-op."""
+        return []
+
+    def get_cached_models_status(self) -> dict[str, dict[str, Any]]:
+        """Return memory cache and usage status. Default empty."""
+        return {}
+

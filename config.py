@@ -102,6 +102,12 @@ class Settings(BaseModel):
     whisper_models_dir: Path = Field(
         default_factory=lambda: Path(_whisper_cfg.get("models_dir") or os.getenv("WHISPER_MODELS_DIR", str(MODELS_DIR)))
     )
+    model_idle_timeout_seconds: int = Field(
+        default_factory=lambda: int(
+            _whisper_cfg.get("model_idle_timeout_seconds")
+            or os.getenv("MODEL_IDLE_TIMEOUT_SECONDS", "1800")
+        )
+    )
 
     # Audio Processor Settings
     ffmpeg_bin: str | None = Field(

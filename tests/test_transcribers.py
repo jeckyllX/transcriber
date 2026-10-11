@@ -71,3 +71,121 @@ def test_transcriber_factory():
     # Should safely retrieve the available engine (faster-whisper in this env)
     active = factory.get_transcriber()
     assert active.is_available()
+
+
+def test_managed_model_pool_lease_and_release():
+    from transcribers.model_pool import ManagedModelPool
+    import time
+
+    loaded = []
+    disposed = []
+
+    def loader(name):
+        loaded.append(name)
+        return {"name": name, "weights": [1, 2, 3]}
+
+    def disposer(inst):
+        disposed.append(inst["name"])
+
+    pool = ManagedModelPool(loader=loader, disposer=disposer, name="test-pool")
+
+    # Initial state
+    assert not pool.is_in_use("tiny")
+    assert pool.get_status() == {}
+
+    # Lease model
+    with pool.lease("tiny") as model:
+        assert model["name"] == "tiny"
+        assert pool.is_in_use("tiny")
+        status = pool.get_status()
+        assert status["tiny"]["in_use"] is True
+        assert status["tiny"]["active_leases"] == 1
+
+    # After lease exit
+    assert not pool.is_in_use("tiny")
+    status = pool.get_status()
+    assert status["tiny"]["in_use"] is False
+    assert status["tiny"]["active_leases"] == 0
+    assert len(loaded) == 1
+    assert len(disposed) == 0
+
+
+def test_managed_model_pool_eviction_protection_while_processing():
+    from transcribers.model_pool import ManagedModelPool
+    import time
+
+    disposed = []
+    pool = ManagedModelPool(
+        loader=lambda name: {"name": name},
+        disposer=lambda inst: disposed.append(inst["name"]),
+        name="test-pool",
+    )
+
+    # Start an active lease
+    with pool.lease("base") as model:
+        assert pool.is_in_use("base")
+
+        # Attempt to evict idle models with a 0-second threshold while leased
+        evicted = pool.evict_idle(timeout_seconds=0.001)
+        assert "base" not in evicted
+        assert pool.is_in_use("base")
+        assert len(disposed) == 0
+
+        # Attempt manual unload while leased
+        unloaded = pool.unload_idle()
+        assert "base" not in unloaded
+        assert len(disposed) == 0
+
+    # Model is now released (idle). Sleep briefly past threshold
+    time.sleep(0.05)
+    evicted = pool.evict_idle(timeout_seconds=0.02)
+    assert "base" in evicted
+    assert "base" in disposed
+    assert pool.get_status() == {}
+
+
+def test_managed_model_pool_exception_safety():
+    from transcribers.model_pool import ManagedModelPool
+    import pytest
+
+    pool = ManagedModelPool(loader=lambda name: {"name": name}, name="test-pool")
+
+    with pytest.raises(ValueError, match="simulated failure"):
+        with pool.lease("small"):
+            assert pool.is_in_use("small")
+            raise ValueError("simulated failure")
+
+    # Ensure lease count decremented back to 0 despite exception
+    assert not pool.is_in_use("small")
+    status = pool.get_status()
+    assert status["small"]["active_leases"] == 0
+
+
+def test_faster_whisper_and_factory_eviction_lifecycle():
+    from transcribers.faster_whisper import FasterWhisperTranscriber
+    from transcribers.factory import TranscriberFactory
+    import time
+
+    transcriber = FasterWhisperTranscriber()
+    # Mock pool loader for test
+    transcriber.pool.loader = lambda name: {"mock_model": name}
+
+    with transcriber.pool.lease("tiny") as model:
+        assert model["mock_model"] == "tiny"
+        # While leased, cannot be evicted
+        assert transcriber.evict_idle_models(timeout_seconds=0.001) == []
+        assert transcriber.unload_all_idle() == []
+        assert transcriber.unload_model("tiny") is False
+
+    # Once released, can be unloaded
+    time.sleep(0.02)
+    evicted = transcriber.evict_idle_models(timeout_seconds=0.01)
+    assert "tiny" in evicted
+
+    # Test factory delegation
+    factory = TranscriberFactory()
+    status = factory.get_cached_models_status()
+    assert isinstance(status, dict)
+    unloaded = factory.unload_all_idle()
+    assert isinstance(unloaded, dict)
+

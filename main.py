@@ -12,6 +12,7 @@ import logging
 import shutil
 import time
 import uuid
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile, WebSocket, WebSocketDisconnect
@@ -24,7 +25,7 @@ import httpx
 
 from config import BASE_DIR, STATIC_DIR, TEMPLATES_DIR, UPLOADS_DIR, settings, save_config, get_masked_settings
 from audio_processor import AudioProcessor, AudioProcessorError
-from transcribers import transcriber_factory
+from transcribers import transcriber_factory, AsyncModelEvictionMonitor
 from transcribers.streaming import LiveTranscriptionSession
 from llm import llm_registry, get_polish_prompt, get_summary_prompt, ChunkedSummarizer
 from notifications import dispatcher, NotificationPayload, TelegramNotifier, WebhookNotifier
@@ -37,10 +38,26 @@ logging.basicConfig(
 )
 logger = logging.getLogger("transcriber")
 
+model_eviction_monitor = AsyncModelEvictionMonitor(
+    sweep_fn=transcriber_factory.evict_idle_models,
+    check_interval_seconds=60.0,
+)
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    if settings.model_idle_timeout_seconds > 0:
+        model_eviction_monitor.start(timeout_seconds=settings.model_idle_timeout_seconds)
+    yield
+    await model_eviction_monitor.stop()
+    transcriber_factory.unload_all_idle()
+
+
 app = FastAPI(
     title="Audio Transcriber & AI Summarizer",
     description="Audio transcription with Whisper, Ollama polishing/summarization, and notifications.",
     version="1.1.0",
+    lifespan=lifespan,
 )
 
 app.add_middleware(
@@ -135,7 +152,29 @@ async def get_system_status():
         "llm_providers": llm_registry.list_providers(),
         "ollama_connection": ollama_status,
         "notification_providers": dispatcher.list_providers(),
+        "model_cache": transcriber_factory.get_cached_models_status(),
     }
+
+
+@app.get("/api/models/status")
+async def get_models_cache_status():
+    """Return in-memory model cache status, active task leases, and idle durations."""
+    return {
+        "idle_timeout_seconds": settings.model_idle_timeout_seconds,
+        "cached_models": transcriber_factory.get_cached_models_status(),
+    }
+
+
+@app.post("/api/models/unload-idle")
+async def unload_idle_models_endpoint():
+    """Manually unload all cached models that are not actively processing."""
+    unloaded = transcriber_factory.unload_all_idle()
+    return {
+        "status": "ok",
+        "unloaded": unloaded,
+        "remaining": transcriber_factory.get_cached_models_status(),
+    }
+
 
 
 @app.get("/api/llm/models")

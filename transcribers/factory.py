@@ -113,6 +113,34 @@ class TranscriberFactory:
 
         raise RuntimeError("No Whisper transcriber engines are available on this system.")
 
+    def evict_idle_models(self, timeout_seconds: float | None = None) -> dict[str, list[str]]:
+        """Evict idle cached models across all supporting engines."""
+        results: dict[str, list[str]] = {}
+        for engine_id, engine in self._engines.items():
+            evicted = engine.evict_idle_models(timeout_seconds=timeout_seconds)
+            if evicted:
+                results[engine_id] = evicted
+        return results
+
+    def unload_all_idle(self) -> dict[str, list[str]]:
+        """Unload all idle cached models across all supporting engines."""
+        results: dict[str, list[str]] = {}
+        for engine_id, engine in self._engines.items():
+            evicted = engine.unload_all_idle()
+            if evicted:
+                results[engine_id] = evicted
+        return results
+
+    def get_cached_models_status(self) -> dict[str, dict[str, Any]]:
+        """Return memory cache and usage status for engines maintaining in-memory models."""
+        statuses: dict[str, dict[str, Any]] = {}
+        for engine_id, engine in self._engines.items():
+            status = engine.get_cached_models_status()
+            if status:
+                statuses[engine_id] = status
+        return statuses
+
 
 # Global factory instance
 transcriber_factory = TranscriberFactory()
+
