@@ -209,6 +209,10 @@ class JobManager:
                     zf.writestr(f"{folder}/{safe_name}_polished.txt", job.result["polished"])
                 if job.result.get("summary"):
                     zf.writestr(f"{folder}/{safe_name}_summary.txt", job.result["summary"])
+                if job.result.get("summaries"):
+                    for lvl_k, lvl_text in job.result["summaries"].items():
+                        if lvl_text and lvl_text != job.result.get("summary"):
+                            zf.writestr(f"{folder}/{safe_name}_summary_{lvl_k}.txt", lvl_text)
 
                 manifest_entries.append({
                     "job_id": job.job_id,
@@ -469,7 +473,10 @@ class JobManager:
                         ):
                             accumulated.append(token)
                             self.emit(job_id, "ai_token", {"token": token, "action": "summary"})
-                        job_result["summary"] = "".join(accumulated)
+                        summary_text = "".join(accumulated)
+                        job_result["summary"] = summary_text
+                        job_result["summary_level"] = summary_level
+                        job_result["summaries"] = {summary_level: summary_text}
                 except Exception as ai_err:
                     logger.warning("AI post-processing (%s) failed for job %s: %s", ai_action, job_id, ai_err)
                     warn_text = f"AI {ai_action} skipped: {ai_err}. Check that Ollama is running ('ollama serve') or your API key is valid."

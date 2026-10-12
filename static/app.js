@@ -85,6 +85,36 @@ document.addEventListener("DOMContentLoaded", () => {
   const resummarizeLevelBtns = document.querySelectorAll(".resummarize-level-btn");
   let resummarizeActiveLevel = "bullets";
   let ondemandSummaryActiveLevel = "bullets";
+  let activeAiAbortController = null;
+
+  function getSummaryLevelName(level) {
+    switch (level) {
+      case "tldr": return "TL;DR";
+      case "detailed": return "Detailed Breakdown";
+      case "action_items": return "Action Items";
+      case "bullets":
+      default: return "Key Takeaways";
+    }
+  }
+
+  function updateResummarizePillsUI(activeLevel) {
+    resummarizeActiveLevel = activeLevel;
+    if (resummarizeLevelBtns) {
+      resummarizeLevelBtns.forEach((b) => {
+        const lvl = b.getAttribute("data-resummarize-level");
+        const hasCached = !!(currentResult.summaries && currentResult.summaries[lvl]);
+        if (lvl === activeLevel) {
+          b.classList.add("active", "text-indigo-400", "bg-indigo-500/10", "font-medium");
+          b.classList.remove("text-slate-400");
+          b.title = "Current active summary view";
+        } else {
+          b.classList.remove("active", "text-indigo-400", "bg-indigo-500/10", "font-medium");
+          b.classList.add("text-slate-400");
+          b.title = hasCached ? "Cached (click to view)" : "Click to generate";
+        }
+      });
+    }
+  }
 
   const diarizationCheckbox = document.getElementById("diarization-checkbox");
   const diarizationBadge = document.getElementById("diarization-badge");
@@ -246,6 +276,8 @@ document.addEventListener("DOMContentLoaded", () => {
     num_speakers: 0,
     polished: "",
     summary: "",
+    summaries: {},
+    summary_level: "bullets",
     duration: 0,
     processing_time: 0,
     filename: "",
@@ -649,9 +681,20 @@ document.addEventListener("DOMContentLoaded", () => {
     const model = llmModelSelect.value;
     const chosenLevel = detailLevel || activeSummaryLevel || "bullets";
 
+    if (activeAiAbortController) {
+      try { activeAiAbortController.abort(); } catch (_) {}
+      activeAiAbortController = null;
+    }
+    const currentAbortController = new AbortController();
+    activeAiAbortController = currentAbortController;
+
     if (action === "polish") {
       switchResultTab("polish");
-      if (polishToolbar) polishToolbar.classList.add("hidden");
+      if (polishToolbar) polishToolbar.classList.remove("hidden");
+      if (repolishBtn) {
+        repolishBtn.disabled = true;
+        repolishBtn.classList.add("opacity-50", "cursor-not-allowed");
+      }
       polishContent.innerHTML = `
         <div class="space-y-3">
           <div class="flex items-center gap-2 text-xs font-medium text-indigo-400 animate-pulse">
@@ -666,7 +709,12 @@ document.addEventListener("DOMContentLoaded", () => {
       `;
     } else if (action === "summary") {
       switchResultTab("summary");
-      if (summaryToolbar) summaryToolbar.classList.add("hidden");
+      if (summaryToolbar) summaryToolbar.classList.remove("hidden");
+      updateResummarizePillsUI(chosenLevel);
+      if (resummarizeBtn) {
+        resummarizeBtn.disabled = true;
+        resummarizeBtn.classList.add("opacity-50", "cursor-not-allowed");
+      }
       summaryContent.innerHTML = `
         <div class="space-y-3">
           <div class="flex items-center gap-2 text-xs font-medium text-indigo-400 animate-pulse">
@@ -674,7 +722,7 @@ document.addEventListener("DOMContentLoaded", () => {
               <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
               <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z"></path>
             </svg>
-            <span>Generating ${chosenLevel} summary with ${provider} (${model})...</span>
+            <span>Generating ${getSummaryLevelName(chosenLevel)} with ${provider} (${model})...</span>
           </div>
           <div id="summary-streaming-target" class="prose prose-invert max-w-none text-sm leading-relaxed"></div>
         </div>
@@ -685,6 +733,7 @@ document.addEventListener("DOMContentLoaded", () => {
       const resp = await fetch("/api/process-llm", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
+        signal: currentAbortController.signal,
         body: JSON.stringify({
           text: text,
           action: action,
@@ -747,15 +796,26 @@ document.addEventListener("DOMContentLoaded", () => {
         polishContent.textContent = accumulated;
         if (polishToolbar) polishToolbar.classList.remove("hidden");
       } else if (action === "summary") {
+        if (!currentResult.summaries) currentResult.summaries = {};
+        currentResult.summaries[chosenLevel] = accumulated;
         currentResult.summary = accumulated;
         summaryContent.innerHTML = typeof marked !== "undefined" ? marked.parse(accumulated) : accumulated;
         if (summaryToolbar) summaryToolbar.classList.remove("hidden");
+        updateResummarizePillsUI(chosenLevel);
+
+        if (currentResult.task_id && batchResultsMap[currentResult.task_id]) {
+          batchResultsMap[currentResult.task_id].summaries = currentResult.summaries;
+          batchResultsMap[currentResult.task_id].summary = accumulated;
+        }
       }
 
       updateResultTabStates();
       if (typeof lucide !== "undefined") lucide.createIcons();
 
     } catch (e) {
+      if (e.name === "AbortError") {
+        return;
+      }
       console.warn("AI processing error:", e);
       if (action === "polish") {
         polishContent.innerHTML = renderAiUnavailableNotice("Polish", e.message);
@@ -765,6 +825,18 @@ document.addEventListener("DOMContentLoaded", () => {
         if (summaryToolbar) summaryToolbar.classList.add("hidden");
       }
       updateResultTabStates();
+    } finally {
+      if (activeAiAbortController === currentAbortController) {
+        activeAiAbortController = null;
+      }
+      if (repolishBtn) {
+        repolishBtn.disabled = false;
+        repolishBtn.classList.remove("opacity-50", "cursor-not-allowed");
+      }
+      if (resummarizeBtn) {
+        resummarizeBtn.disabled = false;
+        resummarizeBtn.classList.remove("opacity-50", "cursor-not-allowed");
+      }
     }
   }
 
@@ -965,10 +1037,21 @@ document.addEventListener("DOMContentLoaded", () => {
       renderSpeakerDialogue(currentResult);
     }
 
+    if (!currentResult.summaries) {
+      currentResult.summaries = {};
+    }
+    if (finalResult.summaries) {
+      Object.assign(currentResult.summaries, finalResult.summaries);
+    }
+
+    const initialLevel = finalResult.summary_level || activeSummaryLevel || "bullets";
     if (finalResult.summary && !finalResult.summary.startsWith("[AI summary skipped")) {
       currentResult.summary = finalResult.summary;
+      currentResult.summaries[initialLevel] = finalResult.summary;
+      resummarizeActiveLevel = initialLevel;
       summaryContent.innerHTML = typeof marked !== "undefined" ? marked.parse(finalResult.summary) : finalResult.summary;
       if (summaryToolbar) summaryToolbar.classList.remove("hidden");
+      updateResummarizePillsUI(initialLevel);
     } else if (activeAiAction === "summary") {
       summaryContent.innerHTML = renderAiUnavailableNotice("Summary", finalResult.ai_warning || (finalResult.summary ? finalResult.summary.replace(/^\[|\]$/g, "") : null));
       if (summaryToolbar) summaryToolbar.classList.add("hidden");
@@ -998,6 +1081,11 @@ document.addEventListener("DOMContentLoaded", () => {
   }
 
   async function loadBatchJobResult(jobId) {
+    if (currentResult.task_id && batchResultsMap[currentResult.task_id]) {
+      batchResultsMap[currentResult.task_id].summaries = Object.assign({}, currentResult.summaries || {});
+      batchResultsMap[currentResult.task_id].summary = currentResult.summary;
+    }
+
     if (batchResultsMap[jobId]) {
       displayCompletedResult(batchResultsMap[jobId]);
       if (batchFileSelect) batchFileSelect.value = jobId;
@@ -1227,6 +1315,8 @@ document.addEventListener("DOMContentLoaded", () => {
     currentResult.text = "";
     currentResult.polished = "";
     currentResult.summary = "";
+    currentResult.summaries = {};
+    currentResult.summary_level = activeSummaryLevel || "bullets";
 
     switchResultTab("transcript");
     updateProgressBar(10, "Uploading media and queuing job...", "Queued");
@@ -1743,6 +1833,7 @@ document.addEventListener("DOMContentLoaded", () => {
         if (currentResult.summary && currentResult.summary.trim()) {
           summaryContent.innerHTML = typeof marked !== "undefined" ? marked.parse(currentResult.summary) : currentResult.summary;
           if (summaryToolbar) summaryToolbar.classList.remove("hidden");
+          updateResummarizePillsUI(resummarizeActiveLevel);
         } else {
           summaryContent.innerHTML = renderOnDemandSummaryCard();
           attachOnDemandSummaryListeners();
@@ -1768,6 +1859,9 @@ document.addEventListener("DOMContentLoaded", () => {
   if (resummarizeBtn) {
     resummarizeBtn.addEventListener("click", () => {
       if (!currentResult.text || !currentResult.text.trim()) return;
+      if (currentResult.summaries) {
+        delete currentResult.summaries[resummarizeActiveLevel];
+      }
       triggerStreamingAiProcessing(currentResult.text, "summary", resummarizeActiveLevel);
     });
   }
@@ -1775,15 +1869,28 @@ document.addEventListener("DOMContentLoaded", () => {
   if (resummarizeLevelBtns) {
     resummarizeLevelBtns.forEach((btn) => {
       btn.addEventListener("click", () => {
-        resummarizeLevelBtns.forEach((b) => {
-          b.classList.remove("active", "text-indigo-400", "bg-indigo-500/10", "font-medium");
-          b.classList.add("text-slate-400");
-        });
-        btn.classList.add("active", "text-indigo-400", "bg-indigo-500/10", "font-medium");
-        btn.classList.remove("text-slate-400");
-        resummarizeActiveLevel = btn.getAttribute("data-resummarize-level");
+        const requestedLevel = btn.getAttribute("data-resummarize-level");
+        if (!requestedLevel) return;
+
+        // If clicking the currently active level and it's already rendered, do nothing
+        if (requestedLevel === resummarizeActiveLevel && currentResult.summaries && currentResult.summaries[requestedLevel]) {
+          return;
+        }
+
+        updateResummarizePillsUI(requestedLevel);
+
+        // Check if we ALREADY have this section generated and cached
+        if (currentResult.summaries && currentResult.summaries[requestedLevel]) {
+          currentResult.summary = currentResult.summaries[requestedLevel];
+          summaryContent.innerHTML = typeof marked !== "undefined" ? marked.parse(currentResult.summary) : currentResult.summary;
+          if (summaryToolbar) summaryToolbar.classList.remove("hidden");
+          if (typeof lucide !== "undefined") lucide.createIcons();
+          return;
+        }
+
+        // Section not in cache yet -> generate it on-demand for this specific format
         if (currentResult.text && currentResult.text.trim()) {
-          triggerStreamingAiProcessing(currentResult.text, "summary", resummarizeActiveLevel);
+          triggerStreamingAiProcessing(currentResult.text, "summary", requestedLevel);
         }
       });
     });
