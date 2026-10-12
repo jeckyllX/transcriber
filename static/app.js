@@ -13,6 +13,22 @@ document.addEventListener("DOMContentLoaded", () => {
   const removeFileBtn = document.getElementById("remove-file-btn");
   const audioPreview = document.getElementById("audio-preview");
 
+  const batchFilesCard = document.getElementById("batch-files-card");
+  const batchCardTitle = document.getElementById("batch-card-title");
+  const batchCardSize = document.getElementById("batch-card-size");
+  const clearBatchFilesBtn = document.getElementById("clear-batch-files-btn");
+  const batchFilesList = document.getElementById("batch-files-list");
+  const batchStatusPanel = document.getElementById("batch-status-panel");
+  const batchStatsBadge = document.getElementById("batch-stats-badge");
+  const batchJobsTable = document.getElementById("batch-jobs-table");
+  const batchFileSelectorBox = document.getElementById("batch-file-selector-box");
+  const batchFileSelect = document.getElementById("batch-file-select");
+  const downloadBatchZipBtn = document.getElementById("download-batch-zip-btn");
+
+  let selectedFiles = [];
+  let currentBatchId = null;
+  let batchResultsMap = {};
+
   const tabUploadBtn = document.getElementById("tab-upload-btn");
   const tabRecordBtn = document.getElementById("tab-record-btn");
   const dropzonePanel = document.getElementById("dropzone-panel");
@@ -482,38 +498,117 @@ document.addEventListener("DOMContentLoaded", () => {
     e.preventDefault();
     dropzone.classList.remove("border-indigo-500", "bg-indigo-950/20");
     if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
-      handleFileSelected(e.dataTransfer.files[0]);
+      handleFilesInput(Array.from(e.dataTransfer.files));
     }
   });
 
   audioFileInput.addEventListener("change", (e) => {
     if (e.target.files && e.target.files.length > 0) {
-      handleFileSelected(e.target.files[0]);
+      handleFilesInput(Array.from(e.target.files));
     }
   });
 
-  function handleFileSelected(file) {
-    selectedFile = file;
+  function handleFilesInput(files) {
+    if (!files || files.length === 0) return;
     recordedBlob = null;
+
+    if (files.length === 1) {
+      selectedFiles = [files[0]];
+      selectedFile = files[0];
+      handleSingleFileSelected(files[0]);
+    } else {
+      selectedFiles = files;
+      selectedFile = null;
+      handleBatchFilesSelected(files);
+    }
+  }
+
+  function handleSingleFileSelected(file) {
+    selectedFile = file;
     fileNameDisplay.textContent = file.name;
     fileSizeDisplay.textContent = (file.size / (1024 * 1024)).toFixed(2) + " MB";
     selectedFileCard.classList.remove("hidden");
+    if (batchFilesCard) batchFilesCard.classList.add("hidden");
     dropzone.classList.add("hidden");
 
     const url = URL.createObjectURL(file);
     audioPreview.src = url;
     audioPreview.classList.remove("hidden");
-    lucide.createIcons();
+    startProcessBtn.innerHTML = '<i data-lucide="play" class="w-4 h-4"></i> Start Transcription & Processing';
+    if (typeof lucide !== "undefined") lucide.createIcons();
   }
 
-  removeFileBtn.addEventListener("click", () => {
+  function handleBatchFilesSelected(files) {
+    selectedFile = null;
+    selectedFileCard.classList.add("hidden");
+    if (batchFilesCard) batchFilesCard.classList.remove("hidden");
+    dropzone.classList.add("hidden");
+    audioPreview.src = "";
+    audioPreview.classList.add("hidden");
+
+    renderBatchFilesQueue();
+  }
+
+  function renderBatchFilesQueue() {
+    if (!batchFilesCard || !batchFilesList) return;
+    const totalBytes = selectedFiles.reduce((acc, f) => acc + f.size, 0);
+    const totalMb = (totalBytes / (1024 * 1024)).toFixed(2);
+    if (batchCardTitle) batchCardTitle.textContent = `Batch Queue (${selectedFiles.length} files)`;
+    if (batchCardSize) batchCardSize.textContent = `${totalMb} MB total`;
+
+    batchFilesList.innerHTML = "";
+    selectedFiles.forEach((file, index) => {
+      const item = document.createElement("div");
+      item.className = "flex items-center justify-between p-2 rounded-lg bg-slate-900/60 border border-slate-800 text-xs text-slate-200";
+      const sizeStr = (file.size / (1024 * 1024)).toFixed(2) + " MB";
+      item.innerHTML = `
+        <div class="flex items-center space-x-2 truncate">
+          <i data-lucide="file-audio" class="w-3.5 h-3.5 text-indigo-400 flex-shrink-0"></i>
+          <span class="truncate font-medium">${file.name}</span>
+          <span class="text-[10px] text-slate-400 font-mono flex-shrink-0">(${sizeStr})</span>
+        </div>
+        <button type="button" class="remove-batch-item-btn text-slate-400 hover:text-red-400 p-1 transition-colors flex-shrink-0" data-index="${index}">
+          <i data-lucide="x" class="w-3.5 h-3.5"></i>
+        </button>
+      `;
+      batchFilesList.appendChild(item);
+    });
+
+    batchFilesList.querySelectorAll(".remove-batch-item-btn").forEach((btn) => {
+      btn.addEventListener("click", (e) => {
+        const idx = parseInt(e.currentTarget.getAttribute("data-index"), 10);
+        selectedFiles.splice(idx, 1);
+        if (selectedFiles.length === 0) {
+          clearAllSelectedFiles();
+        } else if (selectedFiles.length === 1) {
+          handleSingleFileSelected(selectedFiles[0]);
+        } else {
+          renderBatchFilesQueue();
+        }
+      });
+    });
+
+    startProcessBtn.innerHTML = `<i data-lucide="layers" class="w-4 h-4"></i> Start Batch Processing (${selectedFiles.length} files)`;
+    if (typeof lucide !== "undefined") lucide.createIcons();
+  }
+
+  function clearAllSelectedFiles() {
+    selectedFiles = [];
     selectedFile = null;
     audioFileInput.value = "";
     selectedFileCard.classList.add("hidden");
+    if (batchFilesCard) batchFilesCard.classList.add("hidden");
     dropzone.classList.remove("hidden");
     audioPreview.src = "";
     audioPreview.classList.add("hidden");
-  });
+    startProcessBtn.innerHTML = '<i data-lucide="play" class="w-4 h-4"></i> Start Transcription & Processing';
+    if (typeof lucide !== "undefined") lucide.createIcons();
+  }
+
+  if (clearBatchFilesBtn) {
+    clearBatchFilesBtn.addEventListener("click", clearAllSelectedFiles);
+  }
+  removeFileBtn.addEventListener("click", clearAllSelectedFiles);
 
   // Helper to downsample Float32 audio buffer to 16kHz 16-bit PCM little-endian
   function downsampleBuffer(buffer, inputSampleRate, outputSampleRate = 16000) {
@@ -863,8 +958,249 @@ document.addEventListener("DOMContentLoaded", () => {
     progressBar.style.width = `${percent}%`;
   }
 
+  function displayCompletedResult(finalResult) {
+    currentResult = Object.assign(currentResult, finalResult);
+
+    if (finalResult.segments && finalResult.segments.length > 0) {
+      renderSpeakerDialogue(currentResult);
+    }
+
+    if (finalResult.summary && !finalResult.summary.startsWith("[AI summary skipped")) {
+      currentResult.summary = finalResult.summary;
+      summaryContent.innerHTML = typeof marked !== "undefined" ? marked.parse(finalResult.summary) : finalResult.summary;
+      if (summaryToolbar) summaryToolbar.classList.remove("hidden");
+    } else if (activeAiAction === "summary") {
+      summaryContent.innerHTML = renderAiUnavailableNotice("Summary", finalResult.ai_warning || (finalResult.summary ? finalResult.summary.replace(/^\[|\]$/g, "") : null));
+      if (summaryToolbar) summaryToolbar.classList.add("hidden");
+    }
+
+    if (finalResult.polished && !finalResult.polished.startsWith("[AI polish skipped")) {
+      currentResult.polished = finalResult.polished;
+      polishContent.textContent = finalResult.polished;
+      if (polishToolbar) polishToolbar.classList.remove("hidden");
+    } else if (activeAiAction === "polish") {
+      polishContent.innerHTML = renderAiUnavailableNotice("Polish", finalResult.ai_warning || (finalResult.polished ? finalResult.polished.replace(/^\[|\]$/g, "") : null));
+      if (polishToolbar) polishToolbar.classList.add("hidden");
+    }
+
+    const speakerCountStr = finalResult.num_speakers ? ` • ${finalResult.num_speakers} Speaker${finalResult.num_speakers > 1 ? "s" : ""} Identified` : "";
+    transcriptionStats.textContent = `Duration: ${finalResult.duration ? finalResult.duration.toFixed(1) : 0}s • Processed in: ${finalResult.processing_time}s • Language: ${(finalResult.language || "auto").toUpperCase()}${speakerCountStr}`;
+    transcriptPlainText.textContent = finalResult.text || "";
+
+    updateResultTabStates();
+    if (activeAiAction === "summary" && currentResult.summary) {
+      switchResultTab("summary");
+    } else if (activeAiAction === "polish" && currentResult.polished) {
+      switchResultTab("polish");
+    } else {
+      switchResultTab("transcript");
+    }
+  }
+
+  async function loadBatchJobResult(jobId) {
+    if (batchResultsMap[jobId]) {
+      displayCompletedResult(batchResultsMap[jobId]);
+      if (batchFileSelect) batchFileSelect.value = jobId;
+      return;
+    }
+
+    try {
+      const res = await fetch(`/api/jobs/${jobId}`);
+      if (!res.ok) return;
+      const data = await res.json();
+      if (data.result) {
+        batchResultsMap[jobId] = data.result;
+        displayCompletedResult(data.result);
+        if (batchFileSelect) batchFileSelect.value = jobId;
+      }
+    } catch (e) {
+      console.error("Failed to load job result:", e);
+    }
+  }
+
+  function renderBatchStatus(summary) {
+    if (!summary) return;
+    const { total_jobs, completed_jobs, overall_progress, status, jobs } = summary;
+
+    updateProgressBar(
+      overall_progress,
+      `Batch Processing: ${completed_jobs} of ${total_jobs} files completed (${status})`,
+      `${overall_progress}%`
+    );
+
+    if (batchStatsBadge) {
+      batchStatsBadge.textContent = `${completed_jobs} / ${total_jobs} completed (${overall_progress}%)`;
+    }
+
+    if (completed_jobs > 0 && downloadBatchZipBtn) {
+      downloadBatchZipBtn.classList.remove("hidden");
+    }
+
+    if (batchJobsTable && jobs) {
+      batchJobsTable.innerHTML = "";
+      jobs.forEach((j) => {
+        const row = document.createElement("div");
+        row.className = "flex items-center justify-between p-2 rounded-lg bg-slate-900/60 border border-slate-800 text-xs";
+
+        let badgeClass = "bg-slate-800 text-slate-400 border-slate-700";
+        let statusIcon = "clock";
+        if (j.status === "completed") {
+          badgeClass = "bg-emerald-500/10 text-emerald-400 border-emerald-500/20";
+          statusIcon = "check-circle-2";
+        } else if (j.status === "failed") {
+          badgeClass = "bg-rose-500/10 text-rose-400 border-rose-500/20";
+          statusIcon = "alert-circle";
+        } else if (j.status !== "queued") {
+          badgeClass = "bg-indigo-500/10 text-indigo-400 border-indigo-500/20 animate-pulse";
+          statusIcon = "loader-2";
+        }
+
+        row.innerHTML = `
+          <div class="flex items-center space-x-2 truncate">
+            <span class="truncate font-medium text-slate-200">${j.filename}</span>
+            <span class="text-[10px] text-slate-400 font-mono">${j.duration ? j.duration.toFixed(1) + "s" : ""}</span>
+          </div>
+          <div class="flex items-center space-x-2">
+            <span class="px-2 py-0.5 rounded text-[10px] border ${badgeClass} flex items-center gap-1 font-mono">
+              <i data-lucide="${statusIcon}" class="w-3 h-3 ${j.status !== 'queued' && j.status !== 'completed' && j.status !== 'failed' ? 'animate-spin' : ''}"></i>
+              ${j.status.toUpperCase()} ${j.status !== 'completed' && j.status !== 'failed' && j.status !== 'queued' ? j.progress + '%' : ''}
+            </span>
+            ${j.has_result ? `<button type="button" class="view-job-res-btn text-indigo-400 hover:text-indigo-300 px-2 py-0.5 rounded bg-indigo-500/10 text-[10px] font-medium" data-jobid="${j.job_id}">View</button>` : ''}
+          </div>
+        `;
+        batchJobsTable.appendChild(row);
+      });
+
+      batchJobsTable.querySelectorAll(".view-job-res-btn").forEach((btn) => {
+        btn.addEventListener("click", async (e) => {
+          const jid = e.currentTarget.getAttribute("data-jobid");
+          await loadBatchJobResult(jid);
+        });
+      });
+    }
+
+    // Refresh batch dropdown options
+    if (batchFileSelect && jobs) {
+      const currentVal = batchFileSelect.value;
+      const completedList = jobs.filter((j) => j.has_result);
+      if (batchFileSelect.children.length !== completedList.length) {
+        batchFileSelect.innerHTML = "";
+        completedList.forEach((j) => {
+          const opt = document.createElement("option");
+          opt.value = j.job_id;
+          opt.textContent = j.filename;
+          batchFileSelect.appendChild(opt);
+        });
+        if (currentVal && batchFileSelect.querySelector(`option[value="${currentVal}"]`)) {
+          batchFileSelect.value = currentVal;
+        } else if (completedList.length > 0) {
+          batchFileSelect.value = completedList[0].job_id;
+          loadBatchJobResult(completedList[0].job_id);
+        }
+      }
+    }
+
+    if (typeof lucide !== "undefined") lucide.createIcons();
+  }
+
+  async function submitBatchJobs() {
+    startProcessBtn.disabled = true;
+    startProcessBtn.classList.add("opacity-50", "cursor-not-allowed");
+    resultsContainer.classList.remove("hidden");
+    if (batchStatusPanel) batchStatusPanel.classList.remove("hidden");
+    if (batchFileSelectorBox) batchFileSelectorBox.classList.remove("hidden");
+    if (downloadBatchZipBtn) downloadBatchZipBtn.classList.add("hidden");
+
+    batchResultsMap = {};
+    if (batchFileSelect) batchFileSelect.innerHTML = "";
+    updateProgressBar(5, `Uploading ${selectedFiles.length} files to batch queue...`, `0/${selectedFiles.length}`);
+
+    const formData = new FormData();
+    for (const f of selectedFiles) {
+      formData.append("files", f);
+    }
+    formData.append("whisper_engine", whisperEngineSelect.value);
+    formData.append("whisper_model", whisperModelSelect.value);
+    formData.append("language", languageSelect.value);
+    formData.append("vad_filter", vadCheckbox ? vadCheckbox.checked : true);
+    formData.append("clean_audio", cleanAudioCheckbox ? cleanAudioCheckbox.checked : false);
+    formData.append("enable_diarization", diarizationCheckbox ? diarizationCheckbox.checked : false);
+    formData.append("num_speakers", numSpeakersSelect ? numSpeakersSelect.value : -1);
+    formData.append("ai_action", activeAiAction);
+    formData.append("summary_level", activeSummaryLevel);
+    formData.append("llm_provider", llmProviderSelect.value);
+    formData.append("llm_model", llmModelSelect.value);
+    formData.append("notify", notifyCheckbox.checked);
+
+    try {
+      const resp = await fetch("/api/jobs/batch", { method: "POST", body: formData });
+      if (!resp.ok) {
+        const err = await resp.json();
+        throw new Error(err.detail || "Batch submission failed.");
+      }
+      const data = await resp.json();
+      currentBatchId = data.batch_id;
+      renderBatchStatus(data.summary);
+
+      // Connect to Batch SSE Stream
+      const batchEventSource = new EventSource(`/api/batches/${currentBatchId}/stream`);
+
+      batchEventSource.addEventListener("batch_status", (e) => {
+        const summary = JSON.parse(e.data);
+        renderBatchStatus(summary);
+      });
+
+      batchEventSource.addEventListener("batch_progress", (e) => {
+        const payload = JSON.parse(e.data);
+        if (payload.summary) {
+          renderBatchStatus(payload.summary);
+        }
+      });
+
+      batchEventSource.addEventListener("batch_completed", (e) => {
+        const summary = JSON.parse(e.data);
+        renderBatchStatus(summary);
+        batchEventSource.close();
+        startProcessBtn.disabled = false;
+        startProcessBtn.classList.remove("opacity-50", "cursor-not-allowed");
+        if (downloadBatchZipBtn) downloadBatchZipBtn.classList.remove("hidden");
+      });
+
+      batchEventSource.onerror = () => {
+        batchEventSource.close();
+        startProcessBtn.disabled = false;
+        startProcessBtn.classList.remove("opacity-50", "cursor-not-allowed");
+      };
+
+    } catch (err) {
+      alert("Batch submission error: " + err.message);
+      startProcessBtn.disabled = false;
+      startProcessBtn.classList.remove("opacity-50", "cursor-not-allowed");
+    }
+  }
+
+  if (batchFileSelect) {
+    batchFileSelect.addEventListener("change", (e) => {
+      if (e.target.value) {
+        loadBatchJobResult(e.target.value);
+      }
+    });
+  }
+
+  if (downloadBatchZipBtn) {
+    downloadBatchZipBtn.addEventListener("click", () => {
+      if (currentBatchId) {
+        window.location.href = `/api/batches/${currentBatchId}/export-zip`;
+      }
+    });
+  }
+
   // Primary Execution via Async Background Job Queue & SSE Stream
   startProcessBtn.addEventListener("click", async () => {
+    if (selectedFiles.length > 1) {
+      return submitBatchJobs();
+    }
+
     const fileToUpload = selectedFile || (recordedBlob ? new File([recordedBlob], "mic.webm", { type: "audio/webm" }) : null);
     if (!fileToUpload) {
       alert("Please upload an audio/video file or record with your microphone first.");
@@ -874,6 +1210,9 @@ document.addEventListener("DOMContentLoaded", () => {
     startProcessBtn.disabled = true;
     startProcessBtn.classList.add("opacity-50", "cursor-not-allowed");
     resultsContainer.classList.remove("hidden");
+    if (batchStatusPanel) batchStatusPanel.classList.add("hidden");
+    if (batchFileSelectorBox) batchFileSelectorBox.classList.add("hidden");
+    if (downloadBatchZipBtn) downloadBatchZipBtn.classList.add("hidden");
 
     // Reset results views
     transcriptSegmentsList.innerHTML = "";
@@ -969,42 +1308,7 @@ document.addEventListener("DOMContentLoaded", () => {
         startProcessBtn.disabled = false;
         startProcessBtn.classList.remove("opacity-50", "cursor-not-allowed");
 
-        currentResult = Object.assign(currentResult, finalResult);
-
-        if (finalResult.segments && finalResult.segments.length > 0) {
-          renderSpeakerDialogue(currentResult);
-        }
-
-        if (finalResult.summary && !finalResult.summary.startsWith("[AI summary skipped")) {
-          currentResult.summary = finalResult.summary;
-          summaryContent.innerHTML = typeof marked !== "undefined" ? marked.parse(finalResult.summary) : finalResult.summary;
-          if (summaryToolbar) summaryToolbar.classList.remove("hidden");
-        } else if (activeAiAction === "summary") {
-          summaryContent.innerHTML = renderAiUnavailableNotice("Summary", finalResult.ai_warning || (finalResult.summary ? finalResult.summary.replace(/^\[|\]$/g, "") : null));
-          if (summaryToolbar) summaryToolbar.classList.add("hidden");
-        }
-
-        if (finalResult.polished && !finalResult.polished.startsWith("[AI polish skipped")) {
-          currentResult.polished = finalResult.polished;
-          polishContent.textContent = finalResult.polished;
-          if (polishToolbar) polishToolbar.classList.remove("hidden");
-        } else if (activeAiAction === "polish") {
-          polishContent.innerHTML = renderAiUnavailableNotice("Polish", finalResult.ai_warning || (finalResult.polished ? finalResult.polished.replace(/^\[|\]$/g, "") : null));
-          if (polishToolbar) polishToolbar.classList.add("hidden");
-        }
-
-        const speakerCountStr = finalResult.num_speakers ? ` • ${finalResult.num_speakers} Speaker${finalResult.num_speakers > 1 ? "s" : ""} Identified` : "";
-        transcriptionStats.textContent = `Duration: ${finalResult.duration.toFixed(1)}s • Processed in: ${finalResult.processing_time}s • Language: ${(finalResult.language || "auto").toUpperCase()}${speakerCountStr}`;
-        transcriptPlainText.textContent = finalResult.text;
-
-        updateResultTabStates();
-        if (activeAiAction === "summary" && currentResult.summary) {
-          switchResultTab("summary");
-        } else if (activeAiAction === "polish" && currentResult.polished) {
-          switchResultTab("polish");
-        } else {
-          switchResultTab("transcript");
-        }
+        displayCompletedResult(finalResult);
       });
 
       eventSource.addEventListener("failed", (e) => {

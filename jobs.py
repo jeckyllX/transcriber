@@ -38,6 +38,16 @@ class Job:
     error: str | None = None
     created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     event_queues: list[asyncio.Queue[dict[str, Any]]] = field(default_factory=list)
+    batch_id: str | None = None
+
+
+@dataclass
+class BatchJob:
+    """Represents a collection of jobs submitted together for sequential or concurrent processing."""
+    batch_id: str
+    job_ids: list[str] = field(default_factory=list)
+    created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    event_queues: list[asyncio.Queue[dict[str, Any]]] = field(default_factory=list)
 
 
 class JobManager:
@@ -45,6 +55,7 @@ class JobManager:
 
     def __init__(self):
         self._jobs: dict[str, Job] = {}
+        self._batches: dict[str, BatchJob] = {}
         self._semaphore: asyncio.Semaphore | None = None
 
     @property
@@ -54,14 +65,175 @@ class JobManager:
             self._semaphore = asyncio.Semaphore(settings.max_concurrent_jobs)
         return self._semaphore
 
-    def create_job(self, filename: str) -> Job:
+    def create_job(self, filename: str, batch_id: str | None = None) -> Job:
         job_id = str(uuid.uuid4())[:8]
-        job = Job(job_id=job_id, filename=filename)
+        job = Job(job_id=job_id, filename=filename, batch_id=batch_id)
         self._jobs[job_id] = job
         return job
 
     def get_job(self, job_id: str) -> Job | None:
         return self._jobs.get(job_id)
+
+    def create_batch(self, filenames: list[str]) -> tuple[BatchJob, list[Job]]:
+        batch_id = str(uuid.uuid4())[:8]
+        batch = BatchJob(batch_id=batch_id)
+        created_jobs = []
+        for filename in filenames:
+            job = self.create_job(filename, batch_id=batch_id)
+            batch.job_ids.append(job.job_id)
+            created_jobs.append(job)
+        self._batches[batch_id] = batch
+        return batch, created_jobs
+
+    def get_batch(self, batch_id: str) -> BatchJob | None:
+        return self._batches.get(batch_id)
+
+    def list_batches(self) -> list[dict[str, Any]]:
+        return [
+            summary for b_id in self._batches
+            if (summary := self.get_batch_summary(b_id)) is not None
+        ]
+
+    def get_batch_summary(self, batch_id: str) -> dict[str, Any] | None:
+        batch = self.get_batch(batch_id)
+        if not batch:
+            return None
+
+        jobs = [self.get_job(jid) for jid in batch.job_ids]
+        jobs = [j for j in jobs if j is not None]
+
+        total = len(jobs)
+        completed = sum(1 for j in jobs if j.status == "completed")
+        failed = sum(1 for j in jobs if j.status == "failed")
+        processing = sum(1 for j in jobs if j.status not in ("queued", "completed", "failed"))
+        queued = sum(1 for j in jobs if j.status == "queued")
+
+        if total == 0:
+            overall_status = "empty"
+            overall_progress = 100
+        elif completed == total:
+            overall_status = "completed"
+            overall_progress = 100
+        elif completed + failed == total:
+            overall_status = "partial_failure" if (failed > 0 and completed > 0) else "failed"
+            overall_progress = 100
+        elif processing > 0 or completed > 0:
+            overall_status = "processing"
+            overall_progress = sum(j.progress for j in jobs) // total if total else 0
+        else:
+            overall_status = "queued"
+            overall_progress = 0
+
+        return {
+            "batch_id": batch_id,
+            "created_at": batch.created_at.isoformat(),
+            "status": overall_status,
+            "total_jobs": total,
+            "completed_jobs": completed,
+            "failed_jobs": failed,
+            "processing_jobs": processing,
+            "queued_jobs": queued,
+            "overall_progress": overall_progress,
+            "jobs": [
+                {
+                    "job_id": j.job_id,
+                    "filename": j.filename,
+                    "status": j.status,
+                    "progress": j.progress,
+                    "message": j.message,
+                    "duration": j.duration,
+                    "processing_time": j.processing_time,
+                    "error": j.error,
+                    "has_result": j.result is not None,
+                }
+                for j in jobs
+            ],
+        }
+
+    def subscribe_batch(self, batch_id: str) -> asyncio.Queue[dict[str, Any]]:
+        batch = self.get_batch(batch_id)
+        if not batch:
+            raise KeyError(f"Batch {batch_id} not found")
+        q: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
+        batch.event_queues.append(q)
+        return q
+
+    def unsubscribe_batch(self, batch_id: str, queue: asyncio.Queue[dict[str, Any]]) -> None:
+        batch = self.get_batch(batch_id)
+        if batch and queue in batch.event_queues:
+            batch.event_queues.remove(queue)
+
+    def emit_batch(self, batch_id: str, event: str, data: dict[str, Any]) -> None:
+        batch = self.get_batch(batch_id)
+        if not batch:
+            return
+        payload = {"event": event, "data": data, "timestamp": time.time()}
+        for q in list(batch.event_queues):
+            try:
+                q.put_nowait(payload)
+            except Exception:
+                pass
+
+    def generate_batch_zip(self, batch_id: str) -> bytes | None:
+        batch = self.get_batch(batch_id)
+        if not batch:
+            return None
+
+        import io
+        import json
+        import zipfile
+
+        buf = io.BytesIO()
+        manifest_entries = []
+
+        with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+            for jid in batch.job_ids:
+                job = self.get_job(jid)
+                if not job or not job.result:
+                    continue
+
+                base_name = Path(job.filename).stem or f"job_{job.job_id}"
+                safe_name = "".join(c for c in base_name if c.isalnum() or c in ("-", "_", " ")).strip() or f"job_{job.job_id}"
+                folder = f"{safe_name}_{job.job_id}"
+
+                if job.result.get("text"):
+                    zf.writestr(f"{folder}/{safe_name}.txt", job.result["text"])
+                if job.result.get("srt"):
+                    zf.writestr(f"{folder}/{safe_name}.srt", job.result["srt"])
+                if job.result.get("vtt"):
+                    zf.writestr(f"{folder}/{safe_name}.vtt", job.result["vtt"])
+                if job.result.get("ass"):
+                    zf.writestr(f"{folder}/{safe_name}.ass", job.result["ass"])
+                zf.writestr(f"{folder}/{safe_name}.json", json.dumps(job.result, indent=2))
+                if job.result.get("polished"):
+                    zf.writestr(f"{folder}/{safe_name}_polished.txt", job.result["polished"])
+                if job.result.get("summary"):
+                    zf.writestr(f"{folder}/{safe_name}_summary.txt", job.result["summary"])
+
+                manifest_entries.append({
+                    "job_id": job.job_id,
+                    "filename": job.filename,
+                    "duration": job.duration,
+                    "processing_time": job.processing_time,
+                    "engine_used": job.result.get("engine_used"),
+                    "model_used": job.result.get("model_used"),
+                    "status": job.status,
+                })
+
+            zf.writestr(
+                "batch_manifest.json",
+                json.dumps({
+                    "batch_id": batch_id,
+                    "created_at": batch.created_at.isoformat(),
+                    "total_files": len(batch.job_ids),
+                    "exported_files": len(manifest_entries),
+                    "files": manifest_entries,
+                }, indent=2)
+            )
+
+        buf.seek(0)
+        return buf.getvalue()
+
 
     def rename_speaker(self, job_id: str, old_name: str, new_name: str) -> dict[str, Any] | None:
         """Rename a detected speaker across all segments, turns, and subtitle exports."""
@@ -123,6 +295,16 @@ class JobManager:
                 q.put_nowait(payload)
             except Exception:
                 pass
+
+        if job.batch_id:
+            summary = self.get_batch_summary(job.batch_id)
+            if summary:
+                self.emit_batch(
+                    job.batch_id,
+                    "batch_progress",
+                    {"job_id": job_id, "event": event, "data": data, "summary": summary},
+                )
+
 
     def update_status(self, job_id: str, status: str, progress: int, message: str) -> None:
         job = self.get_job(job_id)

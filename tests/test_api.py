@@ -140,3 +140,87 @@ def test_api_models_endpoints():
     assert "remaining" in unload_data
 
 
+def test_api_batch_jobs_lifecycle():
+    import subprocess
+    import tempfile
+    from pathlib import Path
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        wav1 = Path(tmpdir) / "b1.wav"
+        wav2 = Path(tmpdir) / "b2.wav"
+        for p in (wav1, wav2):
+            subprocess.run(
+                ["ffmpeg", "-y", "-f", "lavfi", "-i", "sine=frequency=800:duration=0.3", "-ar", "16000", "-ac", "1", str(p)],
+                check=True,
+                capture_output=True,
+            )
+
+        with open(wav1, "rb") as f1, open(wav2, "rb") as f2:
+            res = client.post(
+                "/api/jobs/batch",
+                files=[
+                    ("files", ("b1.wav", f1, "audio/wav")),
+                    ("files", ("b2.wav", f2, "audio/wav")),
+                ],
+                data={"whisper_engine": "faster-whisper", "whisper_model": "tiny", "language": "en"},
+            )
+
+        assert res.status_code == 200
+        data = res.json()
+        assert "batch_id" in data
+        batch_id = data["batch_id"]
+        assert data["status"] == "queued"
+        assert data["summary"]["total_jobs"] == 2
+
+        # Test GET /api/batches
+        list_res = client.get("/api/batches")
+        assert list_res.status_code == 200
+        batches = list_res.json().get("batches", [])
+        assert any(b["batch_id"] == batch_id for b in batches)
+
+        # Test GET /api/batches/{batch_id}
+        detail_res = client.get(f"/api/batches/{batch_id}")
+        assert detail_res.status_code == 200
+        detail = detail_res.json()
+        assert detail["batch_id"] == batch_id
+        assert detail["total_jobs"] == 2
+        assert len(detail["jobs"]) == 2
+
+    # Test 404 on nonexistent batch
+    not_found_res = client.get("/api/batches/nonexistent_batch")
+    assert not_found_res.status_code == 404
+
+
+def test_api_batch_zip_export():
+    import io
+    import zipfile
+    from jobs import job_manager
+
+    # Set up a batch with completed mock result
+    batch, jobs = job_manager.create_batch(["mock_sample.wav"])
+    job = jobs[0]
+    job.status = "completed"
+    job.result = {
+        "text": "Transcribed batch sample.",
+        "srt": "1\n00:00:00,000 --> 00:00:01,000\nTranscribed batch sample.",
+        "vtt": "WEBVTT\n\n00:00:00.000 --> 00:00:01.000\nTranscribed batch sample.",
+    }
+
+    # Test GET /api/batches/{batch_id}/export-zip
+    export_res = client.get(f"/api/batches/{batch.batch_id}/export-zip")
+    assert export_res.status_code == 200
+    assert export_res.headers["content-type"] == "application/zip"
+    assert f"batch_{batch.batch_id}_transcripts.zip" in export_res.headers.get("content-disposition", "")
+
+    # Validate zip file contents
+    with zipfile.ZipFile(io.BytesIO(export_res.content), "r") as zf:
+        names = zf.namelist()
+        assert "batch_manifest.json" in names
+        assert any("mock_sample.txt" in n for n in names)
+
+    # Test 404 for nonexistent batch zip export
+    export_404 = client.get("/api/batches/nonexistent/export-zip")
+    assert export_404.status_code == 404
+
+
+

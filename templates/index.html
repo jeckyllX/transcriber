@@ -69,18 +69,18 @@
           <!-- File Upload Dropzone -->
           <div id="dropzone-panel" class="space-y-4">
             <div id="dropzone" class="border-2 border-dashed border-slate-700 hover:border-indigo-500/70 rounded-xl p-8 text-center cursor-pointer transition-all bg-slate-950/40 hover:bg-indigo-950/10">
-              <input type="file" id="audio-file-input" class="hidden" accept="audio/*,video/*,.mp3,.wav,.m4a,.ogg,.flac,.aac,.opus,.webm,.mp4,.mkv,audio/aac,audio/opus,audio/ogg">
+              <input type="file" id="audio-file-input" class="hidden" multiple accept="audio/*,video/*,.mp3,.wav,.m4a,.ogg,.flac,.aac,.opus,.webm,.mp4,.mkv,audio/aac,audio/opus,audio/ogg">
               <div class="mx-auto w-12 h-12 rounded-full bg-slate-800 flex items-center justify-center mb-3 text-slate-400">
                 <i data-lucide="music" class="w-6 h-6"></i>
               </div>
-              <p class="text-sm font-medium text-slate-200">Drag & drop your audio or video file here</p>
-              <p class="text-xs text-slate-400 mt-1">MP3, WAV, M4A, AAC, OPUS, OGG, FLAC, MP4, WEBM (auto-converted to 16kHz WAV)</p>
+              <p class="text-sm font-medium text-slate-200">Drag & drop audio or video files here</p>
+              <p class="text-xs text-slate-400 mt-1">Single file or multi-file batch (auto-converted to 16kHz WAV)</p>
               <button type="button" class="mt-4 px-4 py-2 rounded-lg text-xs font-semibold bg-indigo-600 hover:bg-indigo-500 text-white shadow-md shadow-indigo-600/30 transition-all">
                 Browse Files
               </button>
             </div>
 
-            <!-- Selected File Card -->
+            <!-- Single Selected File Card -->
             <div id="selected-file-card" class="hidden p-4 rounded-xl bg-slate-800/60 border border-slate-700/80 flex items-center justify-between">
               <div class="flex items-center space-x-3 overflow-hidden">
                 <div class="w-10 h-10 rounded-lg bg-indigo-500/20 text-indigo-400 flex items-center justify-center flex-shrink-0">
@@ -94,6 +94,21 @@
               <button id="remove-file-btn" class="text-slate-400 hover:text-red-400 p-2 transition-colors">
                 <i data-lucide="trash-2" class="w-4 h-4"></i>
               </button>
+            </div>
+
+            <!-- Batch Selected Files Card -->
+            <div id="batch-files-card" class="hidden p-4 rounded-xl bg-slate-800/60 border border-slate-700/80 space-y-3">
+              <div class="flex items-center justify-between pb-2 border-b border-slate-700/60">
+                <div class="flex items-center space-x-2">
+                  <span class="w-2 h-2 rounded-full bg-indigo-400"></span>
+                  <span id="batch-card-title" class="text-xs font-semibold text-slate-200">Batch Queue (0 files)</span>
+                  <span id="batch-card-size" class="text-[11px] text-slate-400 font-mono">0.0 MB</span>
+                </div>
+                <button id="clear-batch-files-btn" class="text-xs text-red-400 hover:text-red-300 transition-colors">
+                  Clear All
+                </button>
+              </div>
+              <div id="batch-files-list" class="space-y-1.5 max-h-40 overflow-y-auto custom-scrollbar pr-1"></div>
             </div>
           </div>
 
@@ -304,6 +319,18 @@
       <div class="w-full bg-slate-800 rounded-full h-2 overflow-hidden">
         <div id="progress-bar" class="bg-gradient-to-r from-indigo-500 to-violet-500 h-2 rounded-full w-0 transition-all duration-300"></div>
       </div>
+
+      <!-- Batch Progress Table (Visible in batch mode) -->
+      <div id="batch-status-panel" class="hidden pt-2 border-t border-slate-800/80 space-y-3">
+        <div class="flex items-center justify-between text-xs">
+          <span class="font-medium text-slate-300 flex items-center gap-1.5">
+            <i data-lucide="layers" class="w-3.5 h-3.5 text-indigo-400"></i>
+            <span>Batch Progress</span>
+          </span>
+          <span id="batch-stats-badge" class="px-2 py-0.5 rounded text-[11px] font-mono bg-indigo-500/10 text-indigo-400 border border-indigo-500/20">0 / 0 completed</span>
+        </div>
+        <div id="batch-jobs-table" class="space-y-1.5 max-h-48 overflow-y-auto custom-scrollbar pr-1"></div>
+      </div>
     </div>
 
     <!-- Results Workspace -->
@@ -311,25 +338,38 @@
       
       <!-- Results Header & Tabs -->
       <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-slate-800 pb-4">
-        <div class="flex space-x-1.5 border border-slate-800 p-1 rounded-xl bg-slate-950/60">
-          <button id="res-tab-transcript" class="res-tab active px-3.5 py-2 rounded-lg text-xs font-medium text-indigo-400 bg-indigo-500/10 flex items-center gap-1.5 transition-all">
-            <i data-lucide="file-text" class="w-3.5 h-3.5"></i>
-            <span>Raw Transcript</span>
-          </button>
-          <button id="res-tab-polish" class="res-tab px-3.5 py-2 rounded-lg text-xs font-medium text-slate-400 hover:text-slate-200 flex items-center gap-1.5 transition-all">
-            <i data-lucide="sparkles" class="w-3.5 h-3.5"></i>
-            <span>Polished</span>
-            <span id="tab-badge-polish" class="hidden text-[10px] px-1.5 py-0.5 rounded-full font-medium transition-all"></span>
-          </button>
-          <button id="res-tab-summary" class="res-tab px-3.5 py-2 rounded-lg text-xs font-medium text-slate-400 hover:text-slate-200 flex items-center gap-1.5 transition-all">
-            <i data-lucide="list-collapse" class="w-3.5 h-3.5"></i>
-            <span>Summary</span>
-            <span id="tab-badge-summary" class="hidden text-[10px] px-1.5 py-0.5 rounded-full font-medium transition-all"></span>
-          </button>
+        <div class="flex items-center flex-wrap gap-3">
+          <!-- Batch File Selector Dropdown (visible in batch mode) -->
+          <div id="batch-file-selector-box" class="hidden flex items-center gap-2 pr-2 border-r border-slate-800">
+            <label for="batch-file-select" class="text-xs text-slate-400 flex items-center gap-1 font-medium">
+              <i data-lucide="file-audio" class="w-3.5 h-3.5 text-indigo-400"></i> File:
+            </label>
+            <select id="batch-file-select" class="bg-slate-950 border border-slate-700 rounded-lg px-2.5 py-1.5 text-xs text-slate-200 focus:outline-none focus:border-indigo-500 max-w-[180px] truncate"></select>
+          </div>
+
+          <div class="flex space-x-1.5 border border-slate-800 p-1 rounded-xl bg-slate-950/60">
+            <button id="res-tab-transcript" class="res-tab active px-3.5 py-2 rounded-lg text-xs font-medium text-indigo-400 bg-indigo-500/10 flex items-center gap-1.5 transition-all">
+              <i data-lucide="file-text" class="w-3.5 h-3.5"></i>
+              <span>Raw Transcript</span>
+            </button>
+            <button id="res-tab-polish" class="res-tab px-3.5 py-2 rounded-lg text-xs font-medium text-slate-400 hover:text-slate-200 flex items-center gap-1.5 transition-all">
+              <i data-lucide="sparkles" class="w-3.5 h-3.5"></i>
+              <span>Polished</span>
+              <span id="tab-badge-polish" class="hidden text-[10px] px-1.5 py-0.5 rounded-full font-medium transition-all"></span>
+            </button>
+            <button id="res-tab-summary" class="res-tab px-3.5 py-2 rounded-lg text-xs font-medium text-slate-400 hover:text-slate-200 flex items-center gap-1.5 transition-all">
+              <i data-lucide="list-collapse" class="w-3.5 h-3.5"></i>
+              <span>Summary</span>
+              <span id="tab-badge-summary" class="hidden text-[10px] px-1.5 py-0.5 rounded-full font-medium transition-all"></span>
+            </button>
+          </div>
         </div>
 
         <!-- Export & Action Buttons -->
         <div class="flex items-center flex-wrap gap-2">
+          <button id="download-batch-zip-btn" class="hidden px-3 py-1.5 rounded-lg text-xs font-medium bg-gradient-to-r from-indigo-600 to-violet-600 hover:from-indigo-500 hover:to-violet-500 text-white shadow-md shadow-indigo-600/30 flex items-center gap-1.5 transition-all">
+            <i data-lucide="archive" class="w-3.5 h-3.5"></i> Download Batch ZIP
+          </button>
           <button id="copy-btn" class="px-3 py-1.5 rounded-lg text-xs font-medium bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 flex items-center gap-1.5 transition-colors">
             <i data-lucide="copy" class="w-3.5 h-3.5"></i> Copy
           </button>

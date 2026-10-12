@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import Any
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
+from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel
@@ -404,6 +404,130 @@ async def stream_job_events(job_id: str):
             job_manager.unsubscribe(job_id, queue)
 
     return StreamingResponse(sse_generator(), media_type="text/event-stream")
+
+
+# ------------------------------------------------------------------------------
+# Batch Processing Endpoints
+# ------------------------------------------------------------------------------
+@app.post("/api/jobs/batch")
+async def create_batch_jobs(
+    files: list[UploadFile] = File(...),
+    whisper_engine: str = Form(default="faster-whisper"),
+    whisper_model: str = Form(default="base"),
+    language: str = Form(default="auto"),
+    vad_filter: bool = Form(default=True),
+    enable_diarization: bool = Form(default=True),
+    num_speakers: int = Form(default=-1),
+    cluster_threshold: float = Form(default=0.5),
+    ai_action: str = Form(default="summary"),
+    summary_level: str = Form(default="bullets"),
+    llm_provider: str = Form(default="ollama"),
+    llm_model: str | None = Form(default=None),
+    notify: bool = Form(default=False),
+    clean_audio: bool = Form(default=False),
+):
+    """Submit multiple audio/video files for sequential or concurrency-controlled batch processing.
+
+    Returns batch_id and initial batch summary for client tracking.
+    """
+    if not files:
+        raise HTTPException(status_code=400, detail="No files provided for batch processing.")
+
+    filenames = [f.filename for f in files]
+    batch, created_jobs = job_manager.create_batch(filenames)
+
+    for file_obj, job in zip(files, created_jobs):
+        ext = Path(file_obj.filename).suffix or ".wav"
+        temp_upload = UPLOADS_DIR / f"{job.job_id}_upload{ext}"
+        with open(temp_upload, "wb") as f_out:
+            shutil.copyfileobj(file_obj.file, f_out)
+
+        # Enqueue background pipeline task (guarded by job_manager.semaphore)
+        asyncio.create_task(
+            job_manager.run_pipeline(
+                job_id=job.job_id,
+                media_path=temp_upload,
+                whisper_engine=whisper_engine,
+                whisper_model=whisper_model,
+                language=language,
+                vad_filter=vad_filter,
+                enable_diarization=enable_diarization,
+                num_speakers=num_speakers,
+                cluster_threshold=cluster_threshold,
+                ai_action=ai_action,
+                summary_level=summary_level,
+                llm_provider=llm_provider,
+                llm_model=llm_model,
+                notify=notify,
+                clean_audio=clean_audio,
+            )
+        )
+
+    summary = job_manager.get_batch_summary(batch.batch_id)
+    return {"batch_id": batch.batch_id, "status": "queued", "summary": summary}
+
+
+@app.get("/api/batches")
+async def list_batches():
+    """List all registered batches with summary statistics."""
+    return {"batches": job_manager.list_batches()}
+
+
+@app.get("/api/batches/{batch_id}")
+async def get_batch_details(batch_id: str):
+    """Retrieve state and individual job progress for a specific batch."""
+    summary = job_manager.get_batch_summary(batch_id)
+    if not summary:
+        raise HTTPException(status_code=404, detail="Batch not found")
+    return summary
+
+
+@app.get("/api/batches/{batch_id}/stream")
+async def stream_batch_events(batch_id: str):
+    """Stream real-time batch and individual job progress via Server-Sent Events (SSE)."""
+    summary = job_manager.get_batch_summary(batch_id)
+    if not summary:
+        raise HTTPException(status_code=404, detail="Batch not found")
+
+    queue = job_manager.subscribe_batch(batch_id)
+
+    async def sse_generator():
+        # Emit initial current batch snapshot
+        yield f"event: batch_status\ndata: {json.dumps(summary)}\n\n"
+
+        if summary["status"] in ("completed", "failed", "partial_failure"):
+            return
+
+        try:
+            while True:
+                msg = await queue.get()
+                event_name = msg.get("event", "message")
+                data_json = json.dumps(msg.get("data", {}))
+                yield f"event: {event_name}\ndata: {data_json}\n\n"
+
+                curr = job_manager.get_batch_summary(batch_id)
+                if curr and curr["status"] in ("completed", "failed", "partial_failure"):
+                    yield f"event: batch_completed\ndata: {json.dumps(curr)}\n\n"
+                    break
+        finally:
+            job_manager.unsubscribe_batch(batch_id, queue)
+
+    return StreamingResponse(sse_generator(), media_type="text/event-stream")
+
+
+@app.get("/api/batches/{batch_id}/export-zip")
+async def export_batch_zip(batch_id: str):
+    """Download a ZIP archive containing all formatted transcripts and summaries for a batch."""
+    zip_bytes = job_manager.generate_batch_zip(batch_id)
+    if zip_bytes is None:
+        raise HTTPException(status_code=404, detail="Batch not found")
+
+    return Response(
+        content=zip_bytes,
+        media_type="application/zip",
+        headers={"Content-Disposition": f'attachment; filename="batch_{batch_id}_transcripts.zip"'},
+    )
+
 
 
 # ------------------------------------------------------------------------------
