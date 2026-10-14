@@ -2186,7 +2186,12 @@ document.addEventListener("DOMContentLoaded", () => {
       case "completed":
         return `<span class="px-2 py-0.5 rounded-full text-[10px] font-medium bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">Completed</span>`;
       case "processing":
-        return `<span class="px-2 py-0.5 rounded-full text-[10px] font-medium bg-amber-500/10 text-amber-400 border border-amber-500/20">Processing</span>`;
+      case "converting":
+      case "transcribing":
+      case "processing_ai":
+        return `<span class="px-2 py-0.5 rounded-full text-[10px] font-medium bg-amber-500/10 text-amber-400 border border-amber-500/20 capitalize">${escapeHtml(status.replace(/_/g, " "))}</span>`;
+      case "queued":
+        return `<span class="px-2 py-0.5 rounded-full text-[10px] font-medium bg-slate-500/10 text-slate-400 border border-slate-500/20">Queued</span>`;
       case "failed":
         return `<span class="px-2 py-0.5 rounded-full text-[10px] font-medium bg-rose-500/10 text-rose-400 border border-rose-500/20">Failed</span>`;
       default:
@@ -2276,11 +2281,15 @@ document.addEventListener("DOMContentLoaded", () => {
               </div>
             </div>
             <div class="flex items-center gap-1.5 shrink-0">
-              ${job.status === "completed" ? `
+              ${(job.status === "completed" && job.has_result) ? `
               <button class="history-open-btn px-2.5 py-1.5 rounded-lg text-xs font-medium bg-indigo-600 hover:bg-indigo-500 text-white shadow-sm transition-colors flex items-center gap-1" data-job-id="${escapeHtml(job.job_id)}">
                 <i data-lucide="external-link" class="w-3.5 h-3.5"></i>
                 <span>Open</span>
               </button>` : ""}
+              ${(job.status === "queued" || job.status === "converting" || job.status === "transcribing" || job.status === "processing_ai") ? `
+              <span class="px-2 py-1 rounded-md text-[10px] text-amber-400/90 bg-amber-500/10 border border-amber-500/20 flex items-center gap-1">
+                <i data-lucide="loader-2" class="w-3 h-3 animate-spin"></i> Processing
+              </span>` : ""}
               <button class="history-delete-btn p-1.5 rounded-lg text-slate-400 hover:text-rose-400 hover:bg-rose-500/10 transition-colors" title="Delete record" data-job-id="${escapeHtml(job.job_id)}">
                 <i data-lucide="trash-2" class="w-3.5 h-3.5"></i>
               </button>
