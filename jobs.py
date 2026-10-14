@@ -51,12 +51,20 @@ class BatchJob:
 
 
 class JobManager:
-    """In-memory job coordinator with live event fan-out."""
+    """Job coordinator with live event fan-out and persistent SQLite history."""
 
-    def __init__(self):
+    def __init__(self, store: Any = None):
         self._jobs: dict[str, Job] = {}
         self._batches: dict[str, BatchJob] = {}
         self._semaphore: asyncio.Semaphore | None = None
+        self._store = store
+
+    @property
+    def store(self):
+        if self._store is None:
+            from storage import job_store
+            self._store = job_store
+        return self._store
 
     @property
     def semaphore(self) -> asyncio.Semaphore:
@@ -69,10 +77,23 @@ class JobManager:
         job_id = str(uuid.uuid4())[:8]
         job = Job(job_id=job_id, filename=filename, batch_id=batch_id)
         self._jobs[job_id] = job
+        if self.store:
+            try:
+                self.store.save_job(job)
+            except Exception as e:
+                logger.warning("Failed to save created job to storage: %s", e)
         return job
 
     def get_job(self, job_id: str) -> Job | None:
-        return self._jobs.get(job_id)
+        job = self._jobs.get(job_id)
+        if job is None and self.store:
+            try:
+                job = self.store.get_job(job_id)
+                if job:
+                    self._jobs[job_id] = job
+            except Exception as e:
+                logger.warning("Failed to load job %s from storage: %s", job_id, e)
+        return job
 
     def create_batch(self, filenames: list[str]) -> tuple[BatchJob, list[Job]]:
         batch_id = str(uuid.uuid4())[:8]
@@ -83,10 +104,25 @@ class JobManager:
             batch.job_ids.append(job.job_id)
             created_jobs.append(job)
         self._batches[batch_id] = batch
+        if self.store:
+            try:
+                self.store.save_batch(batch_id, total_files=len(created_jobs))
+            except Exception as e:
+                logger.warning("Failed to save created batch to storage: %s", e)
         return batch, created_jobs
 
     def get_batch(self, batch_id: str) -> BatchJob | None:
-        return self._batches.get(batch_id)
+        batch = self._batches.get(batch_id)
+        if batch is None and self.store:
+            try:
+                stored = self.store.get_batch(batch_id)
+                if stored:
+                    job_ids = [j["job_id"] for j in stored.get("jobs", [])]
+                    batch = BatchJob(batch_id=batch_id, job_ids=job_ids)
+                    self._batches[batch_id] = batch
+            except Exception as e:
+                logger.warning("Failed to load batch %s from storage: %s", batch_id, e)
+        return batch
 
     def list_batches(self) -> list[dict[str, Any]]:
         return [
@@ -274,6 +310,11 @@ class JobManager:
             "new_name": new_name,
             "speaker_turns": job.result["speaker_turns"],
         })
+        if self.store:
+            try:
+                self.store.save_job(job)
+            except Exception as e:
+                logger.warning("Failed to save renamed speaker in storage: %s", e)
         return job.result
 
     def subscribe(self, job_id: str) -> asyncio.Queue[dict[str, Any]]:
@@ -309,7 +350,6 @@ class JobManager:
                     {"job_id": job_id, "event": event, "data": data, "summary": summary},
                 )
 
-
     def update_status(self, job_id: str, status: str, progress: int, message: str) -> None:
         job = self.get_job(job_id)
         if not job:
@@ -318,6 +358,61 @@ class JobManager:
         job.progress = progress
         job.message = message
         self.emit(job_id, "status", {"status": status, "progress": progress, "message": message})
+        if self.store:
+            try:
+                self.store.save_job(job)
+                if job.batch_id:
+                    bsum = self.get_batch_summary(job.batch_id)
+                    if bsum:
+                        self.store.save_batch(
+                            batch_id=job.batch_id,
+                            total_files=bsum.get("total_jobs", 0),
+                            status=bsum.get("status", "processing"),
+                            overall_progress=bsum.get("overall_progress", 0),
+                        )
+            except Exception as e:
+                logger.warning("Failed to update job status in storage: %s", e)
+
+    def list_history(
+        self,
+        page: int = 1,
+        page_size: int = 20,
+        status: str | None = None,
+        batch_id: str | None = None,
+    ) -> tuple[list[dict[str, Any]], int]:
+        """List historical jobs from persistent storage."""
+        if self.store:
+            return self.store.list_jobs(page=page, page_size=page_size, status=status, batch_id=batch_id)
+        return [], 0
+
+    def search_history(self, query: str, limit: int = 20) -> list[dict[str, Any]]:
+        """Perform full-text search across historical transcripts and summaries."""
+        if self.store:
+            return self.store.search_transcripts(query=query, limit=limit)
+        return []
+
+    def delete_job(self, job_id: str) -> bool:
+        """Delete a job from in-memory cache and persistent SQLite store."""
+        self._jobs.pop(job_id, None)
+        if self.store:
+            return self.store.delete_job(job_id)
+        return True
+
+    def delete_batch(self, batch_id: str) -> bool:
+        """Delete a batch and its jobs from cache and storage."""
+        batch = self._batches.pop(batch_id, None)
+        if batch:
+            for jid in batch.job_ids:
+                self._jobs.pop(jid, None)
+        if self.store:
+            return self.store.delete_batch(batch_id, delete_jobs=True)
+        return True
+
+    def get_stats(self) -> dict[str, Any]:
+        """Retrieve aggregated job and storage statistics."""
+        if self.store:
+            return self.store.get_stats()
+        return {"enabled": False, "in_memory_jobs": len(self._jobs)}
 
     async def run_pipeline(
         self,

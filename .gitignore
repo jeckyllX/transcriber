@@ -12,10 +12,14 @@ venv/
 config.json
 *.local.json
 
-# Local binaries, models, uploads
+# Local binaries, models, uploads, and sqlite data
 bin/
 models/
 uploads/
+data/
+*.db
+*.db-shm
+*.db-wal
 *.wav
 *.mp3
 *.m4a

@@ -223,4 +223,57 @@ def test_api_batch_zip_export():
     assert export_404.status_code == 404
 
 
+def test_api_history_and_search():
+    from jobs import job_manager
+
+    # Create and persist a completed job with distinct keywords
+    job = job_manager.create_job("strategy_q4.mp3")
+    job.status = "completed"
+    job.progress = 100
+    job.duration = 84.5
+    job.processing_time = 4.2
+    job.result = {
+        "text": "The key breakthrough was neural audio synthesis with low latency.",
+        "summary": "Breakthrough in synthesis architecture.",
+        "language": "en",
+        "engine_used": "faster-whisper",
+        "model_used": "base",
+    }
+    job_manager.store.save_job(job)
+
+    # 1. Test GET /api/history
+    res_hist = client.get("/api/history?page=1&limit=10")
+    assert res_hist.status_code == 200
+    hist_data = res_hist.json()
+    assert "items" in hist_data
+    assert "total" in hist_data
+    assert hist_data["total"] >= 1
+    assert any(item["job_id"] == job.job_id for item in hist_data["items"])
+
+    # 2. Test GET /api/history/stats
+    res_stats = client.get("/api/history/stats")
+    assert res_stats.status_code == 200
+    stats_data = res_stats.json()
+    assert stats_data["total_jobs"] >= 1
+
+    # 3. Test GET /api/search (FTS5)
+    res_search = client.get("/api/search?q=breakthrough")
+    assert res_search.status_code == 200
+    search_data = res_search.json()
+    assert search_data["total_matches"] >= 1
+    matched = next((r for r in search_data["results"] if r["job_id"] == job.job_id), None)
+    assert matched is not None
+    assert "breakthrough" in matched["text_snippet"].lower() or "breakthrough" in matched["summary_snippet"].lower()
+
+    # 4. Test DELETE /api/history/{job_id}
+    del_res = client.delete(f"/api/history/{job.job_id}")
+    assert del_res.status_code == 200
+    assert del_res.json()["deleted_job_id"] == job.job_id
+
+    # Verify 404 on subsequent delete
+    del_404 = client.delete(f"/api/history/{job.job_id}")
+    assert del_404.status_code == 404
+
+
+
 

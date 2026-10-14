@@ -15,7 +15,7 @@ import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
-from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, File, Form, HTTPException, Query, Request, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse, Response
 from fastapi.staticfiles import StaticFiles
@@ -528,6 +528,66 @@ async def export_batch_zip(batch_id: str):
         headers={"Content-Disposition": f'attachment; filename="batch_{batch_id}_transcripts.zip"'},
     )
 
+
+# ------------------------------------------------------------------------------
+# History & Full-Text Search Endpoints
+# ------------------------------------------------------------------------------
+@app.get("/api/history")
+async def get_history_endpoint(
+    page: int = Query(default=1, ge=1),
+    limit: int = Query(default=20, ge=1, le=100),
+    status: str | None = Query(default=None),
+    batch_id: str | None = Query(default=None),
+):
+    """Retrieve paginated historical transcription jobs."""
+    import math
+    items, total = job_manager.list_history(page=page, page_size=limit, status=status, batch_id=batch_id)
+    pages = max(1, math.ceil(total / limit)) if total > 0 else 1
+    return {
+        "items": items,
+        "total": total,
+        "page": page,
+        "limit": limit,
+        "pages": pages,
+    }
+
+
+@app.get("/api/history/stats")
+async def get_history_stats_endpoint():
+    """Retrieve aggregate statistics across all historical jobs."""
+    return job_manager.get_stats()
+
+
+@app.get("/api/search")
+async def search_transcripts_endpoint(
+    q: str = Query(default="", min_length=1),
+    limit: int = Query(default=20, ge=1, le=50),
+):
+    """Perform full-text search across all historical transcripts and summaries."""
+    results = job_manager.search_history(query=q, limit=limit)
+    return {
+        "query": q,
+        "total_matches": len(results),
+        "results": results,
+    }
+
+
+@app.delete("/api/history/{job_id}")
+async def delete_history_job_endpoint(job_id: str):
+    """Delete a specific historical job and its search index."""
+    deleted = job_manager.delete_job(job_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Job not found in history")
+    return {"status": "ok", "deleted_job_id": job_id}
+
+
+@app.delete("/api/batches/{batch_id}")
+async def delete_batch_endpoint(batch_id: str):
+    """Delete a batch and its constituent jobs."""
+    deleted = job_manager.delete_batch(batch_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Batch not found")
+    return {"status": "ok", "deleted_batch_id": batch_id}
 
 
 # ------------------------------------------------------------------------------

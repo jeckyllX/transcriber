@@ -19,12 +19,13 @@ BASE_DIR: Path = Path(__file__).resolve().parent
 BIN_DIR: Path = BASE_DIR / "bin"
 MODELS_DIR: Path = BASE_DIR / "models"
 UPLOADS_DIR: Path = BASE_DIR / "uploads"
+DATA_DIR: Path = BASE_DIR / "data"
 STATIC_DIR: Path = BASE_DIR / "static"
 TEMPLATES_DIR: Path = BASE_DIR / "templates"
 CONFIG_JSON_PATH: Path = BASE_DIR / "config.json"
 
 # Ensure runtime directories exist
-for directory in (BIN_DIR, MODELS_DIR, UPLOADS_DIR):
+for directory in (BIN_DIR, MODELS_DIR, UPLOADS_DIR, DATA_DIR):
     directory.mkdir(parents=True, exist_ok=True)
 
 
@@ -67,6 +68,7 @@ _telegram_cfg = _notif_cfg.get("telegram", {})
 _webhook_cfg = _notif_cfg.get("webhook", {})
 _diarization_cfg = _cfg.get("diarization", {})
 _audio_cfg = _cfg.get("audio", {})
+_storage_cfg = _cfg.get("storage", {})
 
 
 class Settings(BaseModel):
@@ -206,6 +208,18 @@ class Settings(BaseModel):
     diarization_threshold: float = Field(
         default_factory=lambda: float(_diarization_cfg.get("threshold", 0.5) if _diarization_cfg.get("threshold") is not None else os.getenv("DIARIZATION_THRESHOLD", "0.5"))
     )
+
+    # Storage & History Settings (SQLite + Full-Text Search FTS5)
+    storage_enabled: bool = Field(
+        default_factory=lambda: bool(_storage_cfg.get("enabled", True)) or os.getenv("STORAGE_ENABLED", "true").lower() in ("1", "true", "yes")
+    )
+    storage_db_path: Path = Field(
+        default_factory=lambda: Path(_storage_cfg.get("db_path") or os.getenv("STORAGE_DB_PATH", str(DATA_DIR / "transcriptions.db")))
+    )
+    history_page_size: int = Field(
+        default_factory=lambda: int(_storage_cfg.get("page_size", 20) or os.getenv("HISTORY_PAGE_SIZE", "20"))
+    )
+
 
 
 # Global singleton settings instance

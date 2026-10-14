@@ -29,12 +29,17 @@
         </div>
       </div>
 
-      <!-- Status Badges & Settings Button -->
+      <!-- Status Badges, History & Settings Buttons -->
       <div class="flex items-center space-x-3">
         <div id="ollama-status-badge" class="hidden sm:flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-medium bg-slate-800 text-slate-400 border border-slate-700">
           <span class="w-2 h-2 rounded-full bg-amber-400 animate-pulse"></span>
           <span>Checking Ollama...</span>
         </div>
+        <button id="open-history-btn" class="flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm bg-slate-800 hover:bg-slate-700 text-slate-200 transition-colors border border-slate-700">
+          <i data-lucide="history" class="w-4 h-4 text-indigo-400"></i>
+          <span class="hidden sm:inline">History</span>
+          <span id="history-count-badge" class="hidden px-1.5 py-0.2 rounded-full text-[10px] bg-indigo-500/20 text-indigo-300 font-mono"></span>
+        </button>
         <button id="open-settings-btn" class="flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm bg-slate-800 hover:bg-slate-700 text-slate-200 transition-colors border border-slate-700">
           <i data-lucide="settings" class="w-4 h-4"></i>
           <span class="hidden sm:inline">Settings</span>
@@ -563,7 +568,72 @@
     </div>
   </div>
 
-  <script src="/static/app.js?v=5.0"></script>
+  <!-- History & Full-Text Search Modal -->
+  <div id="history-modal" class="hidden fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm p-4">
+    <div class="bg-slate-900 border border-slate-800 rounded-2xl max-w-4xl w-full p-6 space-y-5 shadow-2xl flex flex-col max-h-[85vh]">
+      
+      <!-- Modal Header -->
+      <div class="flex items-center justify-between border-b border-slate-800 pb-4">
+        <div class="flex items-center gap-3">
+          <div class="w-8 h-8 rounded-lg bg-indigo-500/10 border border-indigo-500/20 flex items-center justify-center text-indigo-400">
+            <i data-lucide="history" class="w-4 h-4"></i>
+          </div>
+          <div>
+            <h3 class="text-base font-semibold text-slate-200">Job History & Transcripts</h3>
+            <p class="text-xs text-slate-400">Search past transcriptions, inspect summaries, and restore to workspace</p>
+          </div>
+        </div>
+        <button id="close-history-btn" class="text-slate-400 hover:text-slate-200 p-1 rounded-lg hover:bg-slate-800 transition-colors">
+          <i data-lucide="x" class="w-5 h-5"></i>
+        </button>
+      </div>
+
+      <!-- Search & Filters Toolbar -->
+      <div class="flex flex-col sm:flex-row gap-3">
+        <div class="relative flex-1">
+          <i data-lucide="search" class="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400"></i>
+          <input type="text" id="history-search-input" placeholder="Search full text, filenames, summaries..." class="w-full bg-slate-950/60 border border-slate-800 rounded-xl pl-9 pr-8 py-2 text-xs text-slate-200 placeholder-slate-500 focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500">
+          <button id="history-clear-search-btn" class="hidden absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-200 p-0.5">
+            <i data-lucide="x" class="w-3.5 h-3.5"></i>
+          </button>
+        </div>
+        <div class="flex gap-2">
+          <select id="history-status-filter" class="bg-slate-950/60 border border-slate-800 rounded-xl px-3 py-2 text-xs text-slate-200 focus:outline-none focus:border-indigo-500">
+            <option value="">All Statuses</option>
+            <option value="completed">Completed</option>
+            <option value="processing">Processing</option>
+            <option value="failed">Failed</option>
+          </select>
+          <button id="refresh-history-btn" title="Refresh history" class="px-3 py-2 rounded-xl text-xs font-medium bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 flex items-center gap-1.5 transition-colors">
+            <i data-lucide="refresh-cw" class="w-3.5 h-3.5"></i>
+            <span class="hidden sm:inline">Refresh</span>
+          </button>
+        </div>
+      </div>
+
+      <!-- History Items Container -->
+      <div id="history-list-container" class="flex-1 overflow-y-auto space-y-3 pr-1 custom-scrollbar min-h-[300px]">
+        <!-- Dynamically rendered items -->
+      </div>
+
+      <!-- Pagination Footer -->
+      <div id="history-pagination" class="pt-3 border-t border-slate-800 flex items-center justify-between text-xs text-slate-400">
+        <div id="history-count-info">Showing 0 jobs</div>
+        <div class="flex items-center gap-2">
+          <button id="history-prev-btn" disabled class="px-2.5 py-1.5 rounded-lg border border-slate-800 bg-slate-950/60 hover:bg-slate-800 disabled:opacity-40 disabled:cursor-not-allowed text-slate-300">
+            Previous
+          </button>
+          <span id="history-page-indicator" class="font-mono text-slate-400">Page 1</span>
+          <button id="history-next-btn" disabled class="px-2.5 py-1.5 rounded-lg border border-slate-800 bg-slate-950/60 hover:bg-slate-800 disabled:opacity-40 disabled:cursor-not-allowed text-slate-300">
+            Next
+          </button>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  <script src="/static/app.js?v=6.0"></script>
   <script>
     lucide.createIcons();
   </script>

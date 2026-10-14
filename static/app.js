@@ -152,6 +152,25 @@ document.addEventListener("DOMContentLoaded", () => {
   const liveInterimText = document.getElementById("live-interim-text");
   const liveCursor = document.getElementById("live-cursor");
 
+  const openHistoryBtn = document.getElementById("open-history-btn");
+  const closeHistoryBtn = document.getElementById("close-history-btn");
+  const historyModal = document.getElementById("history-modal");
+  const historyCountBadge = document.getElementById("history-count-badge");
+  const historySearchInput = document.getElementById("history-search-input");
+  const historyClearSearchBtn = document.getElementById("history-clear-search-btn");
+  const historyStatusFilter = document.getElementById("history-status-filter");
+  const refreshHistoryBtn = document.getElementById("refresh-history-btn");
+  const historyListContainer = document.getElementById("history-list-container");
+  const historyPagination = document.getElementById("history-pagination");
+  const historyCountInfo = document.getElementById("history-count-info");
+  const historyPrevBtn = document.getElementById("history-prev-btn");
+  const historyNextBtn = document.getElementById("history-next-btn");
+  const historyPageIndicator = document.getElementById("history-page-indicator");
+
+  let historyCurrentPage = 1;
+  let historyTotalPages = 1;
+  let historySearchDebounceTimer = null;
+
   // State
   let selectedFile = null;
   let recordedBlob = null;
@@ -1252,6 +1271,7 @@ document.addEventListener("DOMContentLoaded", () => {
         startProcessBtn.disabled = false;
         startProcessBtn.classList.remove("opacity-50", "cursor-not-allowed");
         if (downloadBatchZipBtn) downloadBatchZipBtn.classList.remove("hidden");
+        updateHistoryBadge();
       });
 
       batchEventSource.onerror = () => {
@@ -1399,6 +1419,7 @@ document.addEventListener("DOMContentLoaded", () => {
         startProcessBtn.classList.remove("opacity-50", "cursor-not-allowed");
 
         displayCompletedResult(finalResult);
+        updateHistoryBadge();
       });
 
       eventSource.addEventListener("failed", (e) => {
@@ -2138,6 +2159,375 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   });
 
+  /* ==========================================================================
+     Job History & Full-Text Search (SQLite FTS5)
+     ========================================================================== */
+
+  function escapeHtml(str) {
+    if (!str) return "";
+    return String(str)
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;")
+      .replace(/'/g, "&#039;");
+  }
+
+  function renderSafeSnippet(snippet) {
+    if (!snippet) return "";
+    const escaped = escapeHtml(snippet);
+    return escaped
+      .replace(/&lt;mark&gt;/gi, "<mark>")
+      .replace(/&lt;\/mark&gt;/gi, "</mark>");
+  }
+
+  function getHistoryStatusBadge(status) {
+    switch (status) {
+      case "completed":
+        return `<span class="px-2 py-0.5 rounded-full text-[10px] font-medium bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">Completed</span>`;
+      case "processing":
+        return `<span class="px-2 py-0.5 rounded-full text-[10px] font-medium bg-amber-500/10 text-amber-400 border border-amber-500/20">Processing</span>`;
+      case "failed":
+        return `<span class="px-2 py-0.5 rounded-full text-[10px] font-medium bg-rose-500/10 text-rose-400 border border-rose-500/20">Failed</span>`;
+      default:
+        return `<span class="px-2 py-0.5 rounded-full text-[10px] font-medium bg-slate-500/10 text-slate-400 border border-slate-500/20 capitalize">${escapeHtml(status || "Unknown")}</span>`;
+    }
+  }
+
+  function formatTimestamp(ts) {
+    if (!ts) return "Unknown";
+    try {
+      const d = new Date(ts * 1000);
+      return d.toLocaleDateString(undefined, {
+        month: "short",
+        day: "numeric",
+        hour: "2-digit",
+        minute: "2-digit"
+      });
+    } catch {
+      return "Unknown";
+    }
+  }
+
+  async function updateHistoryBadge() {
+    if (!historyCountBadge) return;
+    try {
+      const res = await fetch("/api/history/stats");
+      if (!res.ok) return;
+      const stats = await res.json();
+      if (stats && stats.total_jobs !== undefined) {
+        historyCountBadge.textContent = stats.total_jobs;
+        if (stats.total_jobs > 0) {
+          historyCountBadge.classList.remove("hidden");
+        } else {
+          historyCountBadge.classList.add("hidden");
+        }
+      }
+    } catch (e) {
+      console.warn("Failed to update history badge:", e);
+    }
+  }
+
+  function renderHistoryItems(items, isSearch = false) {
+    if (!historyListContainer) return;
+
+    if (!items || items.length === 0) {
+      historyListContainer.innerHTML = `
+        <div class="text-center py-16 text-slate-500 flex flex-col items-center justify-center">
+          <i data-lucide="inbox" class="w-10 h-10 mb-2 opacity-30 text-slate-400"></i>
+          <p class="text-sm font-medium text-slate-300">No transcriptions found</p>
+          <p class="text-xs text-slate-500 mt-1 max-w-sm">
+            ${isSearch ? "No matching records found for this query. Try different keywords." : "Transcribed audio files will be indexed and stored here automatically."}
+          </p>
+        </div>
+      `;
+      if (window.lucide) lucide.createIcons();
+      return;
+    }
+
+    historyListContainer.innerHTML = items.map((job) => {
+      const safeFilename = escapeHtml(job.filename || "Audio Job");
+      const statusBadge = getHistoryStatusBadge(job.status);
+      const timeStr = formatTimestamp(job.created_at);
+      const durationStr = job.duration ? `${Math.round(job.duration)}s audio` : null;
+      const procTimeStr = job.processing_time ? `${job.processing_time.toFixed(1)}s` : null;
+      const langStr = job.language ? job.language.toUpperCase() : null;
+      const engineStr = job.engine ? escapeHtml(job.engine + (job.model ? " (" + job.model + ")" : "")) : null;
+
+      const snippet = job.text_snippet || job.summary_snippet;
+      const hasSnippet = !!snippet;
+
+      return `
+        <div class="p-3.5 rounded-xl border border-slate-800 bg-slate-950/40 hover:bg-slate-950/80 transition-all space-y-2.5" data-job-id="${escapeHtml(job.job_id)}">
+          <div class="flex items-start justify-between gap-3">
+            <div class="min-w-0 flex-1">
+              <div class="flex items-center gap-2 flex-wrap mb-1">
+                <span class="font-medium text-xs text-slate-200 truncate max-w-xs sm:max-w-md" title="${safeFilename}">
+                  ${safeFilename}
+                </span>
+                ${statusBadge}
+                ${engineStr ? `<span class="px-1.5 py-0.5 rounded text-[10px] bg-slate-800 text-slate-400 border border-slate-700/60 font-mono">${engineStr}</span>` : ""}
+              </div>
+              <div class="flex items-center gap-3 text-[11px] text-slate-400 flex-wrap">
+                <span><i data-lucide="calendar" class="w-3 h-3 inline mr-1 text-slate-500"></i>${timeStr}</span>
+                ${durationStr ? `<span><i data-lucide="clock" class="w-3 h-3 inline mr-1 text-slate-500"></i>${durationStr}</span>` : ""}
+                ${procTimeStr ? `<span><i data-lucide="zap" class="w-3 h-3 inline mr-1 text-amber-500/70"></i>${procTimeStr}</span>` : ""}
+                ${langStr ? `<span class="uppercase font-mono">${langStr}</span>` : ""}
+              </div>
+            </div>
+            <div class="flex items-center gap-1.5 shrink-0">
+              ${job.status === "completed" ? `
+              <button class="history-open-btn px-2.5 py-1.5 rounded-lg text-xs font-medium bg-indigo-600 hover:bg-indigo-500 text-white shadow-sm transition-colors flex items-center gap-1" data-job-id="${escapeHtml(job.job_id)}">
+                <i data-lucide="external-link" class="w-3.5 h-3.5"></i>
+                <span>Open</span>
+              </button>` : ""}
+              <button class="history-delete-btn p-1.5 rounded-lg text-slate-400 hover:text-rose-400 hover:bg-rose-500/10 transition-colors" title="Delete record" data-job-id="${escapeHtml(job.job_id)}">
+                <i data-lucide="trash-2" class="w-3.5 h-3.5"></i>
+              </button>
+            </div>
+          </div>
+
+          ${hasSnippet ? `
+          <div class="text-xs text-slate-300 bg-slate-900/80 p-2.5 rounded-lg border border-slate-800/80 font-sans leading-relaxed">
+            <div class="text-[10px] uppercase font-bold tracking-wider text-indigo-400 mb-1 flex items-center gap-1">
+              <i data-lucide="sparkles" class="w-3 h-3"></i> FTS5 Match Snippet
+            </div>
+            <div class="text-slate-300 line-clamp-3">${renderSafeSnippet(snippet)}</div>
+          </div>` : ""}
+        </div>
+      `;
+    }).join("");
+
+    if (window.lucide) lucide.createIcons();
+  }
+
+  async function loadHistory(page = 1, status = "") {
+    if (!historyListContainer) return;
+
+    historyListContainer.innerHTML = `
+      <div class="flex items-center justify-center py-16 text-slate-400">
+        <i data-lucide="loader-2" class="w-6 h-6 animate-spin text-indigo-400 mr-2"></i>
+        <span class="text-xs">Loading history...</span>
+      </div>
+    `;
+    if (window.lucide) lucide.createIcons();
+
+    try {
+      const params = new URLSearchParams({ page: page, limit: 10 });
+      if (status) params.append("status", status);
+
+      const res = await fetch(`/api/history?${params.toString()}`);
+      if (!res.ok) throw new Error("Server returned " + res.status);
+      const data = await res.json();
+
+      historyCurrentPage = data.page || 1;
+      historyTotalPages = data.total_pages || 1;
+
+      renderHistoryItems(data.items || [], false);
+
+      if (historyPageIndicator) historyPageIndicator.textContent = `Page ${historyCurrentPage} of ${Math.max(1, historyTotalPages)}`;
+      if (historyCountInfo) historyCountInfo.textContent = `Showing ${data.items ? data.items.length : 0} of ${data.total} jobs`;
+      if (historyPrevBtn) historyPrevBtn.disabled = historyCurrentPage <= 1;
+      if (historyNextBtn) historyNextBtn.disabled = historyCurrentPage >= historyTotalPages;
+      if (historyPagination) historyPagination.classList.remove("hidden");
+    } catch (e) {
+      historyListContainer.innerHTML = `
+        <div class="text-center py-12 text-rose-400 text-xs">
+          <p>Failed to load job history: ${escapeHtml(e.message)}</p>
+        </div>
+      `;
+    }
+  }
+
+  async function searchHistory(query) {
+    if (!query) {
+      if (historyClearSearchBtn) historyClearSearchBtn.classList.add("hidden");
+      loadHistory(1, historyStatusFilter ? historyStatusFilter.value : "");
+      return;
+    }
+
+    if (historyClearSearchBtn) historyClearSearchBtn.classList.remove("hidden");
+    historyListContainer.innerHTML = `
+      <div class="flex items-center justify-center py-16 text-slate-400">
+        <i data-lucide="loader-2" class="w-6 h-6 animate-spin text-indigo-400 mr-2"></i>
+        <span class="text-xs">Searching full-text index...</span>
+      </div>
+    `;
+    if (window.lucide) lucide.createIcons();
+
+    try {
+      const res = await fetch(`/api/search?q=${encodeURIComponent(query)}&limit=25`);
+      if (!res.ok) throw new Error("Search request failed");
+      const data = await res.json();
+
+      renderHistoryItems(data.results || [], true);
+
+      if (historyCountInfo) historyCountInfo.textContent = `Found ${data.count} match${data.count === 1 ? "" : "es"} for "${escapeHtml(query)}"`;
+      if (historyPrevBtn) historyPrevBtn.disabled = true;
+      if (historyNextBtn) historyNextBtn.disabled = true;
+      if (historyPageIndicator) historyPageIndicator.textContent = "Search Results";
+    } catch (e) {
+      historyListContainer.innerHTML = `
+        <div class="text-center py-12 text-rose-400 text-xs">
+          <p>Search failed: ${escapeHtml(e.message)}</p>
+        </div>
+      `;
+    }
+  }
+
+  async function loadJobIntoWorkspace(jobId) {
+    try {
+      const res = await fetch(`/api/jobs/${jobId}`);
+      if (!res.ok) {
+        alert("Failed to load job details.");
+        return;
+      }
+      const data = await res.json();
+      if (!data.result) {
+        alert("This job does not have completed transcription results.");
+        return;
+      }
+
+      historyModal.classList.add("hidden");
+      resultsContainer.classList.remove("hidden");
+      displayCompletedResult(data.result);
+      resultsContainer.scrollIntoView({ behavior: "smooth", block: "start" });
+    } catch (e) {
+      alert("Error loading job into workspace: " + e.message);
+    }
+  }
+
+  async function deleteHistoryJob(jobId, cardEl) {
+    if (!confirm("Are you sure you want to delete this transcription record?")) return;
+    try {
+      const res = await fetch(`/api/history/${jobId}`, { method: "DELETE" });
+      if (res.ok) {
+        if (cardEl) {
+          cardEl.style.opacity = "0";
+          cardEl.style.transform = "scale(0.98)";
+          setTimeout(() => {
+            cardEl.remove();
+            if (!historyListContainer.querySelector("[data-job-id]")) {
+              loadHistory(historyCurrentPage, historyStatusFilter ? historyStatusFilter.value : "");
+            }
+          }, 200);
+        }
+        updateHistoryBadge();
+      } else {
+        const err = await res.json();
+        alert("Failed to delete record: " + (err.detail || "Unknown error"));
+      }
+    } catch (e) {
+      alert("Error deleting record: " + e.message);
+    }
+  }
+
+  // History modal event listeners
+  if (openHistoryBtn) {
+    openHistoryBtn.addEventListener("click", () => {
+      if (historyModal) {
+        historyModal.classList.remove("hidden");
+        if (historySearchInput) historySearchInput.value = "";
+        if (historyClearSearchBtn) historyClearSearchBtn.classList.add("hidden");
+        loadHistory(1, historyStatusFilter ? historyStatusFilter.value : "");
+      }
+    });
+  }
+
+  if (closeHistoryBtn && historyModal) {
+    closeHistoryBtn.addEventListener("click", () => historyModal.classList.add("hidden"));
+  }
+
+  if (historyModal) {
+    historyModal.addEventListener("click", (e) => {
+      if (e.target === historyModal) historyModal.classList.add("hidden");
+    });
+  }
+
+  if (historyListContainer) {
+    historyListContainer.addEventListener("click", (e) => {
+      const openBtn = e.target.closest(".history-open-btn");
+      if (openBtn) {
+        const jobId = openBtn.dataset.jobId;
+        if (jobId) loadJobIntoWorkspace(jobId);
+        return;
+      }
+
+      const deleteBtn = e.target.closest(".history-delete-btn");
+      if (deleteBtn) {
+        const jobId = deleteBtn.dataset.jobId;
+        const cardEl = deleteBtn.closest("[data-job-id]");
+        if (jobId) deleteHistoryJob(jobId, cardEl);
+        return;
+      }
+    });
+  }
+
+  if (historySearchInput) {
+    historySearchInput.addEventListener("input", (e) => {
+      clearTimeout(historySearchDebounceTimer);
+      const val = e.target.value.trim();
+      historySearchDebounceTimer = setTimeout(() => {
+        searchHistory(val);
+      }, 300);
+    });
+  }
+
+  if (historyClearSearchBtn) {
+    historyClearSearchBtn.addEventListener("click", () => {
+      if (historySearchInput) historySearchInput.value = "";
+      searchHistory("");
+    });
+  }
+
+  if (historyStatusFilter) {
+    historyStatusFilter.addEventListener("change", () => {
+      if (historySearchInput) historySearchInput.value = "";
+      if (historyClearSearchBtn) historyClearSearchBtn.classList.add("hidden");
+      loadHistory(1, historyStatusFilter.value);
+    });
+  }
+
+  if (refreshHistoryBtn) {
+    refreshHistoryBtn.addEventListener("click", () => {
+      const q = historySearchInput ? historySearchInput.value.trim() : "";
+      if (q) {
+        searchHistory(q);
+      } else {
+        loadHistory(historyCurrentPage, historyStatusFilter ? historyStatusFilter.value : "");
+      }
+      updateHistoryBadge();
+    });
+  }
+
+  if (historyPrevBtn) {
+    historyPrevBtn.addEventListener("click", () => {
+      if (historyCurrentPage > 1) {
+        loadHistory(historyCurrentPage - 1, historyStatusFilter ? historyStatusFilter.value : "");
+      }
+    });
+  }
+
+  if (historyNextBtn) {
+    historyNextBtn.addEventListener("click", () => {
+      if (historyCurrentPage < historyTotalPages) {
+        loadHistory(historyCurrentPage + 1, historyStatusFilter ? historyStatusFilter.value : "");
+      }
+    });
+  }
+
+  // Keyboard shortcut: Escape to close modals
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") {
+      if (historyModal && !historyModal.classList.contains("hidden")) {
+        historyModal.classList.add("hidden");
+      }
+      if (settingsModal && !settingsModal.classList.contains("hidden")) {
+        settingsModal.classList.add("hidden");
+      }
+    }
+  });
+
   function loadDemoData() {
     selectedFileCard.classList.remove("hidden");
     dropzone.classList.add("hidden");
@@ -2282,4 +2672,5 @@ document.addEventListener("DOMContentLoaded", () => {
   applyStoredPreferences();
   checkSystemStatus();
   updateWhisperModels();
+  updateHistoryBadge();
 });
