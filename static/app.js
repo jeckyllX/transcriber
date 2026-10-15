@@ -2201,8 +2201,14 @@ document.addEventListener("DOMContentLoaded", () => {
 
   function formatTimestamp(ts) {
     if (!ts) return "Unknown";
+    // `created_at` is an ISO-8601 string (e.g. "2026-10-15T20:45:22+00:00"), but this
+    // helper historically assumed Unix epoch seconds. Accept ISO strings, epoch seconds,
+    // and epoch milliseconds; fall back to "Unknown" on unparseable input.
+    const d = typeof ts === "number"
+      ? new Date(ts < 1e12 ? ts * 1000 : ts)
+      : new Date(ts);
+    if (Number.isNaN(d.getTime())) return "Unknown";
     try {
-      const d = new Date(ts * 1000);
       return d.toLocaleDateString(undefined, {
         month: "short",
         day: "numeric",
