@@ -220,6 +220,7 @@ async def update_settings_endpoint(updates: dict[str, Any]):
     """Update settings and persist to config.json."""
     try:
         updated = save_config(updates)
+        dispatcher.reload_from_settings()
         return {"status": "ok", "settings": updated}
     except Exception as e:
         logger.error("Failed to save settings: %s", e)

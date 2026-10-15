@@ -226,18 +226,118 @@ class Settings(BaseModel):
 settings = Settings()
 
 
+MASK_PLACEHOLDER = "••••"
+_MASKED_VALUE = object()  # Sentinel marking values dropped during sanitization
+
+# Nested config sections (e.g. ``notifications.telegram``) mapped to flat Settings attributes.
+_NESTED_SETTINGS_MAP: dict[str, dict[str, str]] = {
+    "notifications.telegram": {
+        "enabled": "telegram_enabled",
+        "bot_token": "telegram_bot_token",
+        "chat_id": "telegram_chat_id",
+    },
+    "notifications.webhook": {
+        "enabled": "webhook_enabled",
+        "url": "webhook_url",
+        "secret": "webhook_secret",
+    },
+}
+
+
 def mask_secret(secret: str | None) -> str:
     """Mask secret API keys or tokens for secure UI display."""
     if not secret:
         return ""
     secret = str(secret).strip()
     if len(secret) <= 8:
-        return "••••••••"
-    return f"{secret[:4]}••••{secret[-4:]}"
+        return MASK_PLACEHOLDER * 2
+    return f"{secret[:4]}{MASK_PLACEHOLDER}{secret[-4:]}"
+
+
+def _strip_masked_values(payload: Any) -> Any:
+    """Recursively remove masked secret placeholders from a settings update payload.
+
+    The settings UI echoes masked credentials back for fields the user did not edit.
+    Persisting those placeholders would overwrite the real secrets, so any string
+    containing the mask placeholder is dropped from the payload entirely.
+    """
+    if isinstance(payload, str):
+        return _MASKED_VALUE if MASK_PLACEHOLDER in payload else payload
+    if isinstance(payload, dict):
+        return {
+            key: cleaned
+            for key, raw in payload.items()
+            if (cleaned := _strip_masked_values(raw)) is not _MASKED_VALUE
+        }
+    return payload
+
+
+def _resolve_setting_attr(section: str, key: str) -> str | None:
+    """Map a config ``section.key`` pair to the corresponding Settings attribute name."""
+    if section == "whisper":
+        return f"default_whisper_{key}" if key in ("engine", "model") else f"whisper_{key}"
+    if section == "server":
+        return key
+    if section == "ollama":
+        return "default_ollama_model" if key == "default_model" else f"ollama_{key}"
+    if section == "openai_compatible":
+        return f"openai_{key}"
+    if section == "storage" and key == "page_size":
+        return "history_page_size"
+    return f"{section}_{key}"
+
+
+def _apply_updates_to_settings(updates: dict[str, Any]) -> None:
+    """Synchronize the in-memory settings singleton with a sanitized update payload."""
+    for section, values in updates.items():
+        if not isinstance(values, dict):
+            continue
+        for key, value in values.items():
+            if isinstance(value, dict):
+                nested_map = _NESTED_SETTINGS_MAP.get(f"{section}.{key}", {})
+                for sub_key, sub_value in value.items():
+                    attr = nested_map.get(sub_key)
+                    if attr and hasattr(settings, attr):
+                        setattr(settings, attr, sub_value)
+                continue
+            attr = _resolve_setting_attr(section, key)
+            if attr and hasattr(settings, attr):
+                setattr(settings, attr, value)
+
+
+def _sync_notification_enablement(config_json: dict[str, Any], updates: dict[str, Any]) -> None:
+    """Derive notification enable flags from the credentials supplied in the update.
+
+    The settings UI configures credentials only, so providing them (or clearing
+    them) implicitly enables (or disables) the channel. This keeps ``enabled`` in
+    config.json coherent and makes saved settings take effect immediately.
+    An explicitly provided ``enabled`` value always wins over derivation.
+    """
+    notifications = updates.get("notifications")
+    if not isinstance(notifications, dict):
+        return
+
+    notif_cfg = config_json.setdefault("notifications", {})
+    if isinstance(notifications.get("telegram"), dict):
+        if "enabled" not in notifications["telegram"]:
+            enabled = bool(settings.telegram_bot_token and settings.telegram_chat_id)
+            settings.telegram_enabled = enabled
+            notif_cfg.setdefault("telegram", {})["enabled"] = enabled
+    if isinstance(notifications.get("webhook"), dict):
+        if "enabled" not in notifications["webhook"]:
+            enabled = bool(settings.webhook_url)
+            settings.webhook_enabled = enabled
+            notif_cfg.setdefault("webhook", {})["enabled"] = enabled
 
 
 def save_config(updates: dict[str, Any]) -> dict[str, Any]:
-    """Persist updated configuration to config.json and reload settings in-memory."""
+    """Persist updated configuration to config.json and reload settings in-memory.
+
+    Masked credential placeholders echoed back by the UI are stripped before
+    persistence so real secrets are never overwritten.
+    """
+    sanitized = _strip_masked_values(updates)
+
     current_json = load_json_config(CONFIG_JSON_PATH)
 
     def deep_update(target: dict[str, Any], src: dict[str, Any]) -> None:
@@ -247,33 +347,12 @@ def save_config(updates: dict[str, Any]) -> dict[str, Any]:
             else:
                 target[k] = v
 
-    deep_update(current_json, updates)
+    deep_update(current_json, sanitized)
+    _apply_updates_to_settings(sanitized)
+    _sync_notification_enablement(current_json, sanitized)
 
     with open(CONFIG_JSON_PATH, "w", encoding="utf-8") as f:
         json.dump(current_json, f, indent=2)
-
-    # Synchronize in-memory settings
-    global settings
-    for section_name, section_dict in updates.items():
-        if not isinstance(section_dict, dict):
-            continue
-        for key, val in section_dict.items():
-            # If secret wasn't modified (or was masked), don't overwrite with mask
-            if isinstance(val, str) and "••••" in val:
-                continue
-
-            attr_name = f"{section_name}_{key}"
-            if section_name == "whisper":
-                attr_name = f"default_whisper_{key}" if key in ("engine", "model") else f"whisper_{key}"
-            elif section_name == "server":
-                attr_name = key
-            elif section_name == "ollama":
-                attr_name = f"default_ollama_model" if key == "default_model" else f"ollama_{key}"
-            elif section_name == "openai_compatible":
-                attr_name = f"openai_{key}"
-
-            if hasattr(settings, attr_name):
-                setattr(settings, attr_name, val)
 
     return get_masked_settings()
 

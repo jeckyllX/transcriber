@@ -21,20 +21,28 @@ class NotificationDispatcher:
     def __init__(self, load_defaults: bool = True):
         self._providers: dict[str, BaseNotifier] = {}
         if load_defaults:
-            self.register(
-                TelegramNotifier(
-                    bot_token=settings.telegram_bot_token,
-                    chat_id=settings.telegram_chat_id,
-                    enabled=settings.telegram_enabled,
-                )
+            self.reload_from_settings()
+
+    def reload_from_settings(self) -> None:
+        """(Re)build the default providers from the current runtime settings.
+
+        Invoked after configuration changes so credential or enable/disable updates
+        take effect immediately, without requiring a server restart.
+        """
+        self.register(
+            TelegramNotifier(
+                bot_token=settings.telegram_bot_token,
+                chat_id=settings.telegram_chat_id,
+                enabled=settings.telegram_enabled,
             )
-            self.register(
-                WebhookNotifier(
-                    webhook_url=settings.webhook_url,
-                    secret=settings.webhook_secret,
-                    enabled=settings.webhook_enabled,
-                )
+        )
+        self.register(
+            WebhookNotifier(
+                webhook_url=settings.webhook_url,
+                secret=settings.webhook_secret,
+                enabled=settings.webhook_enabled,
             )
+        )
 
     def register(self, provider: BaseNotifier) -> None:
         """Register a notification provider."""
