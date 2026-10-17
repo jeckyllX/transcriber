@@ -26,7 +26,7 @@ class TranscriberFactory:
                 display_name="Groq Cloud Whisper",
                 base_url_getter=lambda: settings.groq_base_url,
                 api_key_getter=lambda: settings.groq_api_key,
-                default_model=settings.groq_default_stt_model,
+                default_model=lambda: settings.groq_default_stt_model,
                 supported_models=[
                     "whisper-large-v3-turbo",
                     "whisper-large-v3",
@@ -38,7 +38,7 @@ class TranscriberFactory:
                 display_name="OpenRouter Cloud Whisper",
                 base_url_getter=lambda: settings.openrouter_base_url,
                 api_key_getter=lambda: settings.openrouter_api_key,
-                default_model=settings.openrouter_default_stt_model,
+                default_model=lambda: settings.openrouter_default_stt_model,
                 supported_models=[
                     "openai/whisper-large-v3",
                     "openai/whisper-large-v3-turbo",

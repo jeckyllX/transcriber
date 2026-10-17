@@ -63,7 +63,7 @@ app = FastAPI(
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
-    allow_credentials=True,
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -83,6 +83,7 @@ class LLMProcessRequest(BaseModel):
     custom_instruction: str | None = None
     provider: str = "ollama"
     model: str | None = None
+    job_id: str | None = None
 
 
 class SettingsTestRequest(BaseModel):
@@ -323,24 +324,22 @@ async def create_background_job(
         shutil.copyfileobj(file.file, f)
 
     # Launch background task
-    asyncio.create_task(
-        job_manager.run_pipeline(
-            job_id=job.job_id,
-            media_path=temp_upload,
-            whisper_engine=whisper_engine,
-            whisper_model=whisper_model,
-            language=language,
-            vad_filter=vad_filter,
-            enable_diarization=enable_diarization,
-            num_speakers=num_speakers,
-            cluster_threshold=cluster_threshold,
-            ai_action=ai_action,
-            summary_level=summary_level,
-            llm_provider=llm_provider,
-            llm_model=llm_model,
-            notify=notify,
-            clean_audio=clean_audio,
-        )
+    job_manager.start_job_pipeline(
+        job_id=job.job_id,
+        media_path=temp_upload,
+        whisper_engine=whisper_engine,
+        whisper_model=whisper_model,
+        language=language,
+        vad_filter=vad_filter,
+        enable_diarization=enable_diarization,
+        num_speakers=num_speakers,
+        cluster_threshold=cluster_threshold,
+        ai_action=ai_action,
+        summary_level=summary_level,
+        llm_provider=llm_provider,
+        llm_model=llm_model,
+        notify=notify,
+        clean_audio=clean_audio,
     )
 
     return {"job_id": job.job_id, "status": "queued"}
@@ -444,24 +443,22 @@ async def create_batch_jobs(
             shutil.copyfileobj(file_obj.file, f_out)
 
         # Enqueue background pipeline task (guarded by job_manager.semaphore)
-        asyncio.create_task(
-            job_manager.run_pipeline(
-                job_id=job.job_id,
-                media_path=temp_upload,
-                whisper_engine=whisper_engine,
-                whisper_model=whisper_model,
-                language=language,
-                vad_filter=vad_filter,
-                enable_diarization=enable_diarization,
-                num_speakers=num_speakers,
-                cluster_threshold=cluster_threshold,
-                ai_action=ai_action,
-                summary_level=summary_level,
-                llm_provider=llm_provider,
-                llm_model=llm_model,
-                notify=notify,
-                clean_audio=clean_audio,
-            )
+        job_manager.start_job_pipeline(
+            job_id=job.job_id,
+            media_path=temp_upload,
+            whisper_engine=whisper_engine,
+            whisper_model=whisper_model,
+            language=language,
+            vad_filter=vad_filter,
+            enable_diarization=enable_diarization,
+            num_speakers=num_speakers,
+            cluster_threshold=cluster_threshold,
+            ai_action=ai_action,
+            summary_level=summary_level,
+            llm_provider=llm_provider,
+            llm_model=llm_model,
+            notify=notify,
+            clean_audio=clean_audio,
         )
 
     summary = job_manager.get_batch_summary(batch.batch_id)
@@ -725,49 +722,35 @@ async def transcribe_audio(
         with open(temp_upload, "wb") as f:
             shutil.copyfileobj(file.file, f)
 
-        transcriber = transcriber_factory.get_transcriber(whisper_engine)
-
-        from audio_processor import HAS_NUMPY
-        use_memory = settings.use_in_memory_pcm and HAS_NUMPY and whisper_engine == "faster-whisper"
-
-        if use_memory:
-            audio_input, metadata = audio_processor.convert_to_pcm_array(
-                temp_upload, enhance_audio=clean_audio
-            )
-        else:
-            converted_wav = UPLOADS_DIR / f"{task_id}_16k.wav"
-            audio_input = audio_processor.convert_to_whisper_wav(
-                temp_upload, converted_wav, enhance_audio=clean_audio
-            )
-            metadata = audio_processor.probe_media(temp_upload)
-
-        result = transcriber.transcribe(
-            audio_input,
-            model_name=whisper_model,
-            language=language if language != "auto" else None,
-            vad_filter=vad_filter,
+        loop = asyncio.get_running_loop()
+        (
+            result,
+            num_speakers_detected,
+            duration,
+            engine_name,
+        ) = await loop.run_in_executor(
+            None,
+            lambda: job_manager.transcribe_and_diarize(
+                media_path=temp_upload,
+                whisper_engine=whisper_engine,
+                whisper_model=whisper_model,
+                language=language,
+                vad_filter=vad_filter,
+                enable_diarization=enable_diarization,
+                num_speakers=num_speakers,
+                clean_audio=clean_audio,
+                job_id=task_id,
+            ),
         )
 
-        num_speakers_detected = 0
-        if enable_diarization:
-            try:
-                diarizer = diarizer_factory.get_diarizer("sherpa-onnx")
-                if diarizer.is_available():
-                    diar_res = diarizer.diarize(audio_input, num_speakers=num_speakers)
-                    align_speakers_to_segments(result.segments, diar_res)
-                    num_speakers_detected = diar_res.num_speakers
-            except Exception as d_err:
-                logger.warning("Synchronous diarization error: %s", d_err)
-
         elapsed = round(time.time() - start_time, 2)
-        duration = metadata.duration if metadata else result.duration
 
         return {
             "task_id": task_id,
             "filename": file.filename,
             "duration": duration,
             "processing_time": elapsed,
-            "engine_used": transcriber.name,
+            "engine_used": engine_name,
             "model_used": whisper_model,
             "audio_enhanced": clean_audio,
             "language": result.language,
@@ -808,12 +791,14 @@ async def process_llm(req: LLMProcessRequest):
         raise HTTPException(status_code=400, detail=f"Unsupported LLM provider: {req.provider}")
 
     async def token_stream():
+        accumulated: list[str] = []
         try:
             if req.action == "polish":
                 sys_prompt, prompt = get_polish_prompt(req.text)
                 async for token in prov.generate_stream(
                     prompt=prompt, system_prompt=sys_prompt, model=req.model
                 ):
+                    accumulated.append(token)
                     yield f"data: {json.dumps({'token': token})}\n\n"
             else:
                 summarizer = ChunkedSummarizer(prov)
@@ -823,7 +808,20 @@ async def process_llm(req: LLMProcessRequest):
                     custom_instruction=req.custom_instruction,
                     model=req.model,
                 ):
+                    accumulated.append(token)
                     yield f"data: {json.dumps({'token': token})}\n\n"
+
+            final_text = "".join(accumulated)
+            if req.job_id and final_text:
+                try:
+                    job_manager.update_job_ai_output(
+                        job_id=req.job_id,
+                        action=req.action,
+                        text=final_text,
+                        summary_level=req.detail_level,
+                    )
+                except Exception as save_err:
+                    logger.warning("Failed to persist on-demand AI output for job %s: %s", req.job_id, save_err)
 
             yield "data: [DONE]\n\n"
         except Exception as e:

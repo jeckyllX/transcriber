@@ -36,7 +36,7 @@ class OpenAICompatibleTranscriber(BaseTranscriber):
         display_name: str,
         base_url_getter: Callable[[], str] | str,
         api_key_getter: Callable[[], str | None] | str | None,
-        default_model: str,
+        default_model: str | Callable[[], str],
         supported_models: list[str],
         extra_headers: dict[str, str] | Callable[[], dict[str, str]] | None = None,
         ffmpeg_bin: str = "ffmpeg",
@@ -46,11 +46,22 @@ class OpenAICompatibleTranscriber(BaseTranscriber):
         self.display_name = display_name
         self._base_url_getter = base_url_getter
         self._api_key_getter = api_key_getter
-        self.default_model = default_model
+        self._default_model = default_model
         self.supported_models = supported_models
         self._extra_headers = extra_headers or {}
         self.ffmpeg_bin = ffmpeg_bin
         self.ffprobe_bin = ffprobe_bin
+
+    @property
+    def default_model(self) -> str:
+        """Dynamically resolve default model name."""
+        if callable(self._default_model):
+            return self._default_model()
+        return self._default_model
+
+    @default_model.setter
+    def default_model(self, value: str | Callable[[], str]) -> None:
+        self._default_model = value
 
     def get_api_key(self) -> str | None:
         """Dynamically resolve API key from callable or static string."""

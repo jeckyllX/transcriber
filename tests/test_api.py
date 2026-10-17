@@ -275,5 +275,59 @@ def test_api_history_and_search():
     assert del_404.status_code == 404
 
 
+def test_api_process_llm_persists_on_demand_output_and_indexes_fts():
+    from unittest.mock import MagicMock, patch
+    from jobs import job_manager
+
+    job = job_manager.create_job("deep_learning_brief.wav")
+    job.status = "completed"
+    job.result = {
+        "text": "Deep neural architectures enable unprecedented quantum speedups.",
+        "language": "en",
+    }
+    job_manager.store.save_job(job)
+
+    # Mock provider streaming
+    mock_prov = MagicMock()
+    async def mock_stream(*args, **kwargs):
+        yield "Key "
+        yield "Takeaway: "
+        yield "Quantum "
+        yield "advantage."
+
+    mock_prov.generate_stream = mock_stream
+
+    with patch("main.llm_registry.get_provider", return_value=mock_prov):
+        res = client.post(
+            "/api/process-llm",
+            json={
+                "job_id": job.job_id,
+                "text": job.result["text"],
+                "action": "summary",
+                "detail_level": "bullets",
+                "provider": "ollama",
+            },
+        )
+        assert res.status_code == 200
+        # Consume streaming response
+        content = res.text
+        assert "[DONE]" in content
+
+    # Verify that the job was updated in persistent storage
+    reloaded = job_manager.store.get_job(job.job_id)
+    assert reloaded is not None
+    assert reloaded.result is not None
+    assert reloaded.result["summary"] == "Key Takeaway: Quantum advantage."
+    assert reloaded.result["summaries"]["bullets"] == "Key Takeaway: Quantum advantage."
+
+    # Verify searchable in FTS5
+    search_res = client.get("/api/search?q=advantage")
+    assert search_res.status_code == 200
+    search_json = search_res.json()
+    assert search_json["total_matches"] >= 1
+    assert any(r["job_id"] == job.job_id for r in search_json["results"])
+
+
+
 
 

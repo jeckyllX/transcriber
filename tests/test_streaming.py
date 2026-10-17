@@ -197,3 +197,54 @@ def test_websocket_transcribe_endpoint():
         assert "duration" in completed_msg["result"]
 
 
+def test_live_transcription_session_watermark_prevents_redundant_processing():
+    """Verify watermark prevents should_process from returning True when no new audio arrives."""
+    session = LiveTranscriptionSession(
+        session_id="watermark-test",
+        min_chunk_duration=1.0,
+        sample_rate=16000,
+    )
+
+    # Initial state: uncommitted samples = 0 -> should_process is False
+    assert not session.should_process()
+
+    # Add 1.2s of audio (19200 samples)
+    t = np.linspace(0, 1.2, 19200, endpoint=False)
+    sine = (0.5 * np.sin(2 * np.pi * 300 * t) * 32767).astype(np.int16)
+    session.add_chunk(sine.tobytes())
+
+    # Now uncommitted is 1.2s (>= min_chunk_duration and > 0.3s new) -> should_process is True
+    assert session.should_process()
+
+    # Run step (interim partial)
+    mock_partial = TranscriptionResult(
+        text="hello live world",
+        segments=[Segment(id=0, start=0.0, end=1.2, text="hello live world")],
+        language="en",
+        duration=1.2,
+    )
+    with patch("transcribers.streaming.transcriber_factory.get_transcriber") as mock_factory:
+        mock_transcriber = MagicMock()
+        mock_transcriber.transcribe.return_value = mock_partial
+        mock_factory.return_value = mock_transcriber
+        events = session.step()
+        assert len(events) == 1
+        assert events[0]["event"] == "partial"
+
+    # Immediately after step, WITHOUT new audio, should_process MUST be False!
+    assert not session.should_process()
+
+    # Adding negligible audio (e.g. 0.1s = 1600 samples < 0.3s threshold) -> still False
+    t_tiny = np.linspace(0, 0.1, 1600, endpoint=False)
+    sine_tiny = (0.5 * np.sin(2 * np.pi * 300 * t_tiny) * 32767).astype(np.int16)
+    session.add_chunk(sine_tiny.tobytes())
+    assert not session.should_process()
+
+    # Adding enough audio (e.g. 0.35s = 5600 samples >= 0.3s threshold) -> becomes True again
+    t_more = np.linspace(0, 0.35, 5600, endpoint=False)
+    sine_more = (0.5 * np.sin(2 * np.pi * 300 * t_more) * 32767).astype(np.int16)
+    session.add_chunk(sine_more.tobytes())
+    assert session.should_process()
+
+
+

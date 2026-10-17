@@ -9,7 +9,11 @@ from __future__ import annotations
 import logging
 import uuid
 from typing import Any
-import numpy as np
+
+try:
+    import numpy as np
+except ImportError:
+    np = None  # type: ignore
 
 from transcribers.base import Segment, TranscriptionResult, Word
 from transcribers.factory import transcriber_factory
@@ -148,14 +152,20 @@ class LiveTranscriptionSession:
         self.last_speech_time: float = 0.0
         self._consecutive_silence_count: int = 0
         self._next_segment_id: int = 0
+        self._last_processed_uncommitted_samples: int = 0
 
     def add_chunk(self, pcm_bytes: bytes) -> int:
         """Ingest incoming binary PCM chunk."""
         return self.buffer.append_pcm16(pcm_bytes)
 
     def should_process(self) -> bool:
-        """Determine whether enough audio has arrived to run an inference pass."""
-        return self.buffer.uncommitted_duration_seconds >= self.min_chunk_duration
+        """Determine whether enough new audio has arrived to run an inference pass."""
+        uncommitted = self.buffer.uncommitted_samples_count
+        if uncommitted / self.sample_rate < self.min_chunk_duration:
+            return False
+        # Require at least 0.3s of new audio since the last inference pass
+        new_samples = uncommitted - self._last_processed_uncommitted_samples
+        return new_samples >= int(self.sample_rate * 0.3)
 
     def step(self) -> list[dict[str, Any]]:
         """Run an incremental inference step on uncommitted audio.
@@ -192,6 +202,7 @@ class LiveTranscriptionSession:
                 self.segments.append(seg)
                 self.committed_time_offset += uncommitted_dur
                 self.buffer.commit(len(uncommitted))
+                self._last_processed_uncommitted_samples = self.buffer.uncommitted_samples_count
                 committed_text = self.current_partial_text
                 self.current_partial_text = ""
                 self._consecutive_silence_count = 0
@@ -206,6 +217,9 @@ class LiveTranscriptionSession:
             if uncommitted_dur >= self.max_chunk_duration:
                 self.committed_time_offset += uncommitted_dur
                 self.buffer.commit(len(uncommitted))
+                self._last_processed_uncommitted_samples = 0
+            else:
+                self._last_processed_uncommitted_samples = self.buffer.uncommitted_samples_count
             return []
 
         # Speech detected: run Whisper inference on uncommitted audio
@@ -268,10 +282,12 @@ class LiveTranscriptionSession:
             # Advance buffer and offset
             self.committed_time_offset += uncommitted_dur
             self.buffer.commit(len(uncommitted))
+            self._last_processed_uncommitted_samples = 0
             self.current_partial_text = ""
         else:
             # Emit live interim hypothesis
             self.current_partial_text = recognized_text
+            self._last_processed_uncommitted_samples = self.buffer.uncommitted_samples_count
             events.append({
                 "event": "partial",
                 "text": recognized_text,
@@ -283,6 +299,7 @@ class LiveTranscriptionSession:
 
     def finish(self) -> TranscriptionResult:
         """Finalize the session, transcribing any remaining uncommitted audio."""
+        self._last_processed_uncommitted_samples = 0
         uncommitted = self.buffer.get_uncommitted_samples()
         uncommitted_dur = len(uncommitted) / self.sample_rate
 

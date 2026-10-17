@@ -96,11 +96,13 @@ class SherpaDiarizer(BaseDiarizer):
                 status_callback("Downloading speaker segmentation model (6 MB)...")
             logger.info("Downloading Sherpa-ONNX segmentation model on demand from %s", self.SEG_MODEL_URL)
             tar_path = models_dir / "sherpa-onnx-pyannote-segmentation-3-0.tar.bz2"
-            urllib.request.urlretrieve(self.SEG_MODEL_URL, tar_path)
-            with tarfile.open(tar_path, "r:bz2") as tar:
-                tar.extractall(path=models_dir)
-            if tar_path.is_file():
-                tar_path.unlink()
+            try:
+                urllib.request.urlretrieve(self.SEG_MODEL_URL, tar_path)
+                with tarfile.open(tar_path, "r:bz2") as tar:
+                    tar.extractall(path=models_dir, filter="data")
+            finally:
+                if tar_path.is_file():
+                    tar_path.unlink()
             logger.info("Segmentation model extracted to %s", models_dir)
 
         if not self.embedding_model_path.is_file():
@@ -108,8 +110,15 @@ class SherpaDiarizer(BaseDiarizer):
                 status_callback("Downloading speaker embedding model (37 MB)...")
             logger.info("Downloading Sherpa-ONNX embedding model on demand from %s", self.EMB_MODEL_URL)
             temp_emb = models_dir / "embedding_download.tmp"
-            urllib.request.urlretrieve(self.EMB_MODEL_URL, temp_emb)
-            temp_emb.rename(self.embedding_model_path)
+            try:
+                urllib.request.urlretrieve(self.EMB_MODEL_URL, temp_emb)
+                temp_emb.rename(self.embedding_model_path)
+            finally:
+                if temp_emb.is_file():
+                    try:
+                        temp_emb.unlink()
+                    except Exception:
+                        pass
             logger.info("Embedding model saved to %s", self.embedding_model_path)
 
         return self.models_ready()

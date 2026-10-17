@@ -7,13 +7,16 @@ streaming real-time progress and transcribed segments via Server-Sent Events.
 from __future__ import annotations
 
 import asyncio
+import io
+import json
 import logging
 import time
 import uuid
+import zipfile
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, AsyncGenerator
+from typing import Any, AsyncGenerator, Callable
 
 from audio_processor import AudioProcessor
 from notifications import dispatcher, NotificationPayload
@@ -58,6 +61,26 @@ class JobManager:
         self._batches: dict[str, BatchJob] = {}
         self._semaphore: asyncio.Semaphore | None = None
         self._store = store
+        self._active_tasks: set[asyncio.Task[Any]] = set()
+
+    def start_job_pipeline(self, *args: Any, **kwargs: Any) -> asyncio.Task[None]:
+        """Spawn run_pipeline as an asyncio Task retaining a strong reference until done."""
+        task = asyncio.create_task(self.run_pipeline(*args, **kwargs))
+        self._active_tasks.add(task)
+        task.add_done_callback(self._active_tasks.discard)
+        return task
+
+    def _prune_completed_cache(self, max_cached: int = 100) -> None:
+        """Evict oldest terminal jobs without active SSE subscribers from memory cache."""
+        terminal_ids = [
+            jid for jid, job in self._jobs.items()
+            if job.status in ("completed", "failed") and not job.event_queues
+        ]
+        if len(terminal_ids) > max_cached:
+            terminal_ids.sort(key=lambda jid: self._jobs[jid].created_at)
+            num_to_evict = len(terminal_ids) - max_cached
+            for jid in terminal_ids[:num_to_evict]:
+                self._jobs.pop(jid, None)
 
     @property
     def store(self):
@@ -214,10 +237,6 @@ class JobManager:
         batch = self.get_batch(batch_id)
         if not batch:
             return None
-
-        import io
-        import json
-        import zipfile
 
         buf = io.BytesIO()
         manifest_entries = []
@@ -414,6 +433,110 @@ class JobManager:
             return self.store.get_stats()
         return {"enabled": False, "in_memory_jobs": len(self._jobs)}
 
+    def update_job_ai_output(
+        self,
+        job_id: str,
+        action: str,
+        text: str,
+        summary_level: str | None = None,
+    ) -> bool:
+        """Update AI output in memory and persist to database."""
+        job = self._jobs.get(job_id)
+        if job and isinstance(job.result, dict):
+            if action == "polish":
+                job.result["polished"] = text
+            elif action == "summary":
+                level = summary_level or "bullets"
+                if "summaries" not in job.result or not isinstance(job.result["summaries"], dict):
+                    job.result["summaries"] = {}
+                job.result["summaries"][level] = text
+                job.result["summary"] = text
+                job.result["summary_level"] = level
+
+        if self.store:
+            return self.store.update_job_ai_output(job_id, action, text, summary_level)
+        return job is not None
+
+    def transcribe_and_diarize(
+        self,
+        media_path: Path,
+        whisper_engine: str = "faster-whisper",
+        whisper_model: str = "base",
+        language: str | None = None,
+        vad_filter: bool = True,
+        enable_diarization: bool = False,
+        num_speakers: int = -1,
+        cluster_threshold: float = 0.5,
+        clean_audio: bool = False,
+        on_segment: Callable[[Segment], None] | None = None,
+        job_id: str | None = None,
+    ) -> tuple[Any, int, float, str]:
+        """Unified transcription and speaker diarization worker.
+
+        Converts input media using in-memory PCM or temporary WAV, invokes Whisper
+        transcription, runs optional Sherpa-ONNX diarization, aligns speakers,
+        and guarantees cleanup of intermediate WAV files.
+
+        Returns:
+            (transcription_result, num_speakers_detected, media_duration, transcriber_name)
+        """
+        audio_processor = AudioProcessor()
+        converted_wav: Path | None = None
+        try:
+            from config import settings
+            from audio_processor import HAS_NUMPY
+
+            use_memory = settings.use_in_memory_pcm and HAS_NUMPY and whisper_engine == "faster-whisper"
+
+            if use_memory:
+                audio_input, metadata = audio_processor.convert_to_pcm_array(
+                    media_path, enhance_audio=clean_audio
+                )
+            else:
+                prefix = f"{job_id}_" if job_id else f"{uuid.uuid4().hex[:8]}_"
+                converted_wav = media_path.parent / f"{prefix}16k.wav"
+                audio_input = audio_processor.convert_to_whisper_wav(
+                    media_path, converted_wav, enhance_audio=clean_audio
+                )
+                metadata = audio_processor.probe_media(media_path)
+
+            transcriber = transcriber_factory.get_transcriber(whisper_engine)
+            res = transcriber.transcribe(
+                audio_input,
+                model_name=whisper_model,
+                language=language if language != "auto" else None,
+                vad_filter=vad_filter,
+                on_segment=on_segment,
+            )
+
+            num_speakers_detected = 0
+            if enable_diarization:
+                try:
+                    from diarization import diarizer_factory, align_speakers_to_segments
+                    diarizer = diarizer_factory.get_diarizer("sherpa-onnx")
+                    if diarizer.is_available():
+                        diar_res = diarizer.diarize(
+                            audio_input,
+                            num_speakers=num_speakers,
+                            cluster_threshold=cluster_threshold,
+                        )
+                        align_speakers_to_segments(res.segments, diar_res)
+                        num_speakers_detected = diar_res.num_speakers
+                    else:
+                        logger.warning("Speaker diarization requested but engine or models are not available; skipping.")
+                except Exception as diar_err:
+                    logger.warning("Diarization failed: %s", diar_err)
+
+            duration = metadata.duration if metadata else res.duration
+            return res, num_speakers_detected, duration, transcriber.name
+
+        finally:
+            if converted_wav and converted_wav.exists():
+                try:
+                    converted_wav.unlink()
+                except Exception as clean_err:
+                    logger.warning("Failed to remove converted WAV %s: %s", converted_wav, clean_err)
+
     async def run_pipeline(
         self,
         job_id: str,
@@ -437,8 +560,6 @@ class JobManager:
             return
 
         start_time = time.time()
-        audio_processor = AudioProcessor()
-        converted_wav: Path | None = None
 
         try:
             async with self.semaphore:
@@ -452,25 +573,6 @@ class JobManager:
                     )
                 else:
                     self.update_status(job_id, "converting", 15, "Decoding audio with FFmpeg...")
-                transcriber = transcriber_factory.get_transcriber(whisper_engine)
-
-                from config import settings
-                from audio_processor import HAS_NUMPY
-
-                use_memory = settings.use_in_memory_pcm and HAS_NUMPY and whisper_engine == "faster-whisper"
-
-                if use_memory:
-                    audio_input, metadata = audio_processor.convert_to_pcm_array(
-                        media_path, enhance_audio=clean_audio
-                    )
-                else:
-                    converted_wav = media_path.parent / f"{job_id}_16k.wav"
-                    audio_input = audio_processor.convert_to_whisper_wav(
-                        media_path, converted_wav, enhance_audio=clean_audio
-                    )
-                    metadata = audio_processor.probe_media(media_path)
-
-                job.duration = metadata.duration
 
                 # 2. Transcribe with live segment streaming
                 self.update_status(job_id, "transcribing", 35, "Transcribing with Whisper...")
@@ -480,54 +582,41 @@ class JobManager:
 
                 # Run CPU-bound transcription in threadpool to avoid blocking event loop
                 loop = asyncio.get_running_loop()
-                transcription_result = await loop.run_in_executor(
+                (
+                    transcription_result,
+                    num_speakers_detected,
+                    duration,
+                    engine_name,
+                ) = await loop.run_in_executor(
                     None,
-                    lambda: transcriber.transcribe(
-                        audio_input,
-                        model_name=whisper_model,
-                        language=language if language != "auto" else None,
+                    lambda: self.transcribe_and_diarize(
+                        media_path=media_path,
+                        whisper_engine=whisper_engine,
+                        whisper_model=whisper_model,
+                        language=language,
                         vad_filter=vad_filter,
+                        enable_diarization=enable_diarization,
+                        num_speakers=num_speakers,
+                        cluster_threshold=cluster_threshold,
+                        clean_audio=clean_audio,
                         on_segment=on_segment_callback,
+                        job_id=job_id,
                     ),
                 )
 
-                # 2.5 Speaker Diarization
-                num_speakers_detected = 0
-                if enable_diarization:
-                    try:
-                        from diarization import diarizer_factory, align_speakers_to_segments
-                        diarizer = diarizer_factory.get_diarizer("sherpa-onnx")
-                        if diarizer.is_available():
-                            if hasattr(diarizer, "models_ready") and not diarizer.models_ready():
-                                self.update_status(job_id, "diarizing", 52, "Downloading speaker diarization models on demand (first run only)...")
-                            else:
-                                self.update_status(job_id, "diarizing", 60, "Identifying speakers (diarization)...")
-                            diar_result = await loop.run_in_executor(
-                                None,
-                                lambda: diarizer.diarize(
-                                    audio_input,
-                                    num_speakers=num_speakers,
-                                    cluster_threshold=cluster_threshold,
-                                ),
-                            )
-                            align_speakers_to_segments(transcription_result.segments, diar_result)
-                            num_speakers_detected = diar_result.num_speakers
-                            self.emit(job_id, "diarization", {
-                                "num_speakers": diar_result.num_speakers,
-                                "speakers": diar_result.speaker_names,
-                                "intervals": [i.model_dump() for i in diar_result.intervals],
-                            })
-                        else:
-                            logger.warning("Speaker diarization requested but engine or models are not available; skipping.")
-                    except Exception as diar_err:
-                        logger.warning("Diarization failed for job %s: %s", job_id, diar_err)
+                job.duration = duration
+
+                if enable_diarization and num_speakers_detected > 0:
+                    self.emit(job_id, "diarization", {
+                        "num_speakers": num_speakers_detected,
+                    })
 
             job_result: dict[str, Any] = {
                 "task_id": job_id,
                 "filename": job.filename,
                 "duration": job.duration or transcription_result.duration,
                 "language": transcription_result.language,
-                "engine_used": transcriber.name,
+                "engine_used": engine_name,
                 "model_used": whisper_model,
                 "num_speakers": num_speakers_detected,
                 "speaker_turns": transcription_result.get_speaker_turns(),
@@ -580,7 +669,7 @@ class JobManager:
                         job_result["summary"] = f"[{warn_text}]"
                     elif ai_action == "polish":
                         job_result["polished"] = f"[{warn_text}]"
-                    self.emit(job_id, "status", {"state": "warning", "progress": 85, "message": warn_text})
+                    self.emit(job_id, "status", {"status": "warning", "progress": 85, "message": warn_text})
 
             # 4. Optional Notification Dispatch
             if notify:
@@ -616,11 +705,7 @@ class JobManager:
             self.emit(job_id, "failed", {"error": str(e)})
 
         finally:
-            if converted_wav and converted_wav.exists():
-                try:
-                    converted_wav.unlink()
-                except Exception:
-                    pass
+            self._prune_completed_cache()
             # Clean up source file
             if media_path.exists():
                 try:

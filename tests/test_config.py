@@ -132,3 +132,31 @@ def test_dispatcher_reload_from_settings(monkeypatch):
     telegram = dispatcher.get_provider("telegram")
     assert telegram is not None
     assert telegram.is_configured() is True
+
+
+def test_atomic_save_config(tmp_path, monkeypatch):
+    """Verify save_config writes atomically and leaves no stray temporary files."""
+    cfg_file = tmp_path / "config.json"
+    _write_config(cfg_file, {"server": {"port": 8000}})
+    monkeypatch.setattr(config, "CONFIG_JSON_PATH", cfg_file)
+
+    save_config({"server": {"port": 9000}})
+
+    # Verify updated content
+    data = json.loads(cfg_file.read_text(encoding="utf-8"))
+    assert data["server"]["port"] == 9000
+
+    # Verify no stray .tmp files left in directory
+    tmp_files = list(tmp_path.glob("*.tmp*"))
+    assert len(tmp_files) == 0
+
+
+def test_settings_host_default(monkeypatch):
+    """Verify host defaults to 127.0.0.1 for local isolation unless configured otherwise."""
+    monkeypatch.delenv("HOST", raising=False)
+    from config import Settings
+    s = Settings()
+    # If no server.host in config, defaults to 127.0.0.1
+    if not config._server_cfg.get("host"):
+        assert s.host == "127.0.0.1"
+

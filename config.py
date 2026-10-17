@@ -76,7 +76,7 @@ class Settings(BaseModel):
 
     # Server Settings
     host: str = Field(
-        default_factory=lambda: _server_cfg.get("host") or os.getenv("HOST", "0.0.0.0")
+        default_factory=lambda: _server_cfg.get("host") or os.getenv("HOST", "127.0.0.1")
     )
     port: int = Field(
         default_factory=lambda: int(_server_cfg.get("port") or os.getenv("PORT", "8000"))
@@ -351,8 +351,19 @@ def save_config(updates: dict[str, Any]) -> dict[str, Any]:
     _apply_updates_to_settings(sanitized)
     _sync_notification_enablement(current_json, sanitized)
 
-    with open(CONFIG_JSON_PATH, "w", encoding="utf-8") as f:
-        json.dump(current_json, f, indent=2)
+    tmp_path = CONFIG_JSON_PATH.with_suffix(f".tmp.{os.getpid()}")
+    try:
+        with open(tmp_path, "w", encoding="utf-8") as f:
+            json.dump(current_json, f, indent=2)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp_path, CONFIG_JSON_PATH)
+    finally:
+        if tmp_path.exists():
+            try:
+                tmp_path.unlink()
+            except Exception:
+                pass
 
     return get_masked_settings()
 

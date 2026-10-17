@@ -87,6 +87,31 @@ document.addEventListener("DOMContentLoaded", () => {
   let ondemandSummaryActiveLevel = "bullets";
   let activeAiAbortController = null;
 
+  function escapeHtml(str) {
+    if (!str) return "";
+    return String(str)
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;")
+      .replace(/'/g, "&#039;");
+  }
+
+  function sanitizeRenderedHtml(html) {
+    if (!html || typeof html !== "string") return "";
+    let clean = html.replace(/<\s*(script|iframe|object|embed|style|link)[^>]*>[\s\S]*?<\s*\/\s*\1\s*>/gi, "");
+    clean = clean.replace(/<\s*(script|iframe|object|embed|style|link)[^>]*\/?\s*>/gi, "");
+    clean = clean.replace(/(href|src)\s*=\s*["']?\s*(?:javascript|vbscript|data):[^"'>\s]*/gi, '$1="#"');
+    clean = clean.replace(/\s+on[a-z]+\s*=\s*(?:'[^']*'|"[^"]*"|[^\s>]+)/gi, "");
+    return clean;
+  }
+
+  function renderMarkdown(md) {
+    if (!md) return "";
+    const raw = typeof marked !== "undefined" ? marked.parse(md) : escapeHtml(md);
+    return sanitizeRenderedHtml(raw);
+  }
+
   function getSummaryLevelName(level) {
     switch (level) {
       case "tldr": return "TL;DR";
@@ -615,7 +640,7 @@ document.addEventListener("DOMContentLoaded", () => {
       item.innerHTML = `
         <div class="flex items-center space-x-2 truncate">
           <i data-lucide="file-audio" class="w-3.5 h-3.5 text-indigo-400 flex-shrink-0"></i>
-          <span class="truncate font-medium">${file.name}</span>
+          <span class="truncate font-medium">${escapeHtml(file.name)}</span>
           <span class="text-[10px] text-slate-400 font-mono flex-shrink-0">(${sizeStr})</span>
         </div>
         <button type="button" class="remove-batch-item-btn text-slate-400 hover:text-red-400 p-1 transition-colors flex-shrink-0" data-index="${index}">
@@ -759,6 +784,7 @@ document.addEventListener("DOMContentLoaded", () => {
           detail_level: chosenLevel,
           provider: provider,
           model: model,
+          job_id: (currentResult && currentResult.task_id) || null,
         }),
       });
 
@@ -797,7 +823,7 @@ document.addEventListener("DOMContentLoaded", () => {
                 } else if (action === "summary") {
                   const target = document.getElementById("summary-streaming-target");
                   if (target) {
-                    target.innerHTML = typeof marked !== "undefined" ? marked.parse(accumulated) : accumulated;
+                    target.innerHTML = renderMarkdown(accumulated);
                   }
                 }
               }
@@ -818,7 +844,7 @@ document.addEventListener("DOMContentLoaded", () => {
         if (!currentResult.summaries) currentResult.summaries = {};
         currentResult.summaries[chosenLevel] = accumulated;
         currentResult.summary = accumulated;
-        summaryContent.innerHTML = typeof marked !== "undefined" ? marked.parse(accumulated) : accumulated;
+        summaryContent.innerHTML = renderMarkdown(accumulated);
         if (summaryToolbar) summaryToolbar.classList.remove("hidden");
         updateResummarizePillsUI(chosenLevel);
 
@@ -1068,7 +1094,7 @@ document.addEventListener("DOMContentLoaded", () => {
       currentResult.summary = finalResult.summary;
       currentResult.summaries[initialLevel] = finalResult.summary;
       resummarizeActiveLevel = initialLevel;
-      summaryContent.innerHTML = typeof marked !== "undefined" ? marked.parse(finalResult.summary) : finalResult.summary;
+      summaryContent.innerHTML = renderMarkdown(finalResult.summary);
       if (summaryToolbar) summaryToolbar.classList.remove("hidden");
       updateResummarizePillsUI(initialLevel);
     } else if (activeAiAction === "summary") {
@@ -1162,17 +1188,21 @@ document.addEventListener("DOMContentLoaded", () => {
           statusIcon = "loader-2";
         }
 
+        const safeFilename = escapeHtml(j.filename || "Audio Job");
+        const safeStatus = escapeHtml(j.status || "queued");
+        const safeJobId = escapeHtml(j.job_id || "");
+
         row.innerHTML = `
           <div class="flex items-center space-x-2 truncate">
-            <span class="truncate font-medium text-slate-200">${j.filename}</span>
+            <span class="truncate font-medium text-slate-200">${safeFilename}</span>
             <span class="text-[10px] text-slate-400 font-mono">${j.duration ? j.duration.toFixed(1) + "s" : ""}</span>
           </div>
           <div class="flex items-center space-x-2">
             <span class="px-2 py-0.5 rounded text-[10px] border ${badgeClass} flex items-center gap-1 font-mono">
               <i data-lucide="${statusIcon}" class="w-3 h-3 ${j.status !== 'queued' && j.status !== 'completed' && j.status !== 'failed' ? 'animate-spin' : ''}"></i>
-              ${j.status.toUpperCase()} ${j.status !== 'completed' && j.status !== 'failed' && j.status !== 'queued' ? j.progress + '%' : ''}
+              ${safeStatus.toUpperCase()} ${j.status !== 'completed' && j.status !== 'failed' && j.status !== 'queued' ? j.progress + '%' : ''}
             </span>
-            ${j.has_result ? `<button type="button" class="view-job-res-btn text-indigo-400 hover:text-indigo-300 px-2 py-0.5 rounded bg-indigo-500/10 text-[10px] font-medium" data-jobid="${j.job_id}">View</button>` : ''}
+            ${j.has_result ? `<button type="button" class="view-job-res-btn text-indigo-400 hover:text-indigo-300 px-2 py-0.5 rounded bg-indigo-500/10 text-[10px] font-medium" data-jobid="${safeJobId}">View</button>` : ''}
           </div>
         `;
         batchJobsTable.appendChild(row);
@@ -1406,7 +1436,7 @@ document.addEventListener("DOMContentLoaded", () => {
           switchResultTab("polish");
         } else if (data.action === "summary") {
           currentResult.summary += data.token;
-          summaryContent.innerHTML = marked.parse(currentResult.summary);
+          summaryContent.innerHTML = renderMarkdown(currentResult.summary);
           switchResultTab("summary");
         }
       });
@@ -1536,7 +1566,7 @@ document.addEventListener("DOMContentLoaded", () => {
         speakerBtn.className = `speaker-badge-btn px-2.5 py-1 rounded-md text-xs font-semibold flex items-center gap-1.5 border ${style.badge}`;
         speakerBtn.innerHTML = `
           <i data-lucide="user" class="w-3.5 h-3.5 inline"></i>
-          <span>${turn.speaker}</span>
+          <span>${escapeHtml(turn.speaker)}</span>
           <i data-lucide="pencil" class="w-2.5 h-2.5 inline opacity-60 ml-0.5"></i>
         `;
         speakerBtn.title = "Click to rename this speaker across all turns";
@@ -1659,9 +1689,9 @@ document.addEventListener("DOMContentLoaded", () => {
           <svg class="w-4 h-4 text-amber-400 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/>
           </svg>
-          <span>AI ${actionName} Error / Not Available</span>
+          <span>AI ${escapeHtml(actionName)} Error / Not Available</span>
         </div>
-        <p class="text-xs text-slate-300 leading-relaxed">${detail}</p>
+        <p class="text-xs text-slate-300 leading-relaxed">${escapeHtml(detail)}</p>
         <div class="pt-2 border-t border-amber-500/20 text-xs text-slate-400 space-y-1">
           <p class="font-medium text-slate-300">To resolve:</p>
           <ul class="list-disc list-inside space-y-0.5 text-slate-300">
@@ -1852,7 +1882,7 @@ document.addEventListener("DOMContentLoaded", () => {
       const isStreaming = !!document.getElementById("summary-streaming-target");
       if (!isStreaming) {
         if (currentResult.summary && currentResult.summary.trim()) {
-          summaryContent.innerHTML = typeof marked !== "undefined" ? marked.parse(currentResult.summary) : currentResult.summary;
+          summaryContent.innerHTML = renderMarkdown(currentResult.summary);
           if (summaryToolbar) summaryToolbar.classList.remove("hidden");
           updateResummarizePillsUI(resummarizeActiveLevel);
         } else {
@@ -1903,7 +1933,7 @@ document.addEventListener("DOMContentLoaded", () => {
         // Check if we ALREADY have this section generated and cached
         if (currentResult.summaries && currentResult.summaries[requestedLevel]) {
           currentResult.summary = currentResult.summaries[requestedLevel];
-          summaryContent.innerHTML = typeof marked !== "undefined" ? marked.parse(currentResult.summary) : currentResult.summary;
+          summaryContent.innerHTML = renderMarkdown(currentResult.summary);
           if (summaryToolbar) summaryToolbar.classList.remove("hidden");
           if (typeof lucide !== "undefined") lucide.createIcons();
           return;
@@ -2163,16 +2193,6 @@ document.addEventListener("DOMContentLoaded", () => {
      Job History & Full-Text Search (SQLite FTS5)
      ========================================================================== */
 
-  function escapeHtml(str) {
-    if (!str) return "";
-    return String(str)
-      .replace(/&/g, "&amp;")
-      .replace(/</g, "&lt;")
-      .replace(/>/g, "&gt;")
-      .replace(/"/g, "&quot;")
-      .replace(/'/g, "&#039;");
-  }
-
   function renderSafeSnippet(snippet) {
     if (!snippet) return "";
     const escaped = escapeHtml(snippet);
@@ -2199,11 +2219,9 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   }
 
-  function formatTimestamp(ts) {
+  function formatHistoryDate(ts) {
     if (!ts) return "Unknown";
-    // `created_at` is an ISO-8601 string (e.g. "2026-10-15T20:45:22+00:00"), but this
-    // helper historically assumed Unix epoch seconds. Accept ISO strings, epoch seconds,
-    // and epoch milliseconds; fall back to "Unknown" on unparseable input.
+    // `created_at` can be an ISO-8601 string or numeric epoch seconds/milliseconds
     const d = typeof ts === "number"
       ? new Date(ts < 1e12 ? ts * 1000 : ts)
       : new Date(ts);
@@ -2259,11 +2277,13 @@ document.addEventListener("DOMContentLoaded", () => {
     historyListContainer.innerHTML = items.map((job) => {
       const safeFilename = escapeHtml(job.filename || "Audio Job");
       const statusBadge = getHistoryStatusBadge(job.status);
-      const timeStr = formatTimestamp(job.created_at);
+      const timeStr = formatHistoryDate(job.created_at);
       const durationStr = job.duration ? `${Math.round(job.duration)}s audio` : null;
       const procTimeStr = job.processing_time ? `${job.processing_time.toFixed(1)}s` : null;
       const langStr = job.language ? job.language.toUpperCase() : null;
-      const engineStr = job.engine ? escapeHtml(job.engine + (job.model ? " (" + job.model + ")" : "")) : null;
+      const engineName = job.engine_used || job.engine;
+      const modelName = job.model_used || job.model;
+      const engineStr = engineName ? escapeHtml(engineName + (modelName ? " (" + modelName + ")" : "")) : null;
 
       const snippet = job.text_snippet || job.summary_snippet;
       const hasSnippet = !!snippet;
@@ -2336,7 +2356,7 @@ document.addEventListener("DOMContentLoaded", () => {
       const data = await res.json();
 
       historyCurrentPage = data.page || 1;
-      historyTotalPages = data.total_pages || 1;
+      historyTotalPages = data.pages || data.total_pages || 1;
 
       renderHistoryItems(data.items || [], false);
 
@@ -2377,7 +2397,8 @@ document.addEventListener("DOMContentLoaded", () => {
 
       renderHistoryItems(data.results || [], true);
 
-      if (historyCountInfo) historyCountInfo.textContent = `Found ${data.count} match${data.count === 1 ? "" : "es"} for "${escapeHtml(query)}"`;
+      const matchCount = data.total_matches !== undefined ? data.total_matches : (data.count || 0);
+      if (historyCountInfo) historyCountInfo.textContent = `Found ${matchCount} match${matchCount === 1 ? "" : "es"} for "${escapeHtml(query)}"`;
       if (historyPrevBtn) historyPrevBtn.disabled = true;
       if (historyNextBtn) historyNextBtn.disabled = true;
       if (historyPageIndicator) historyPageIndicator.textContent = "Search Results";
@@ -2647,9 +2668,7 @@ document.addEventListener("DOMContentLoaded", () => {
     renderSpeakerDialogue(currentResult);
     transcriptionStats.textContent = "Duration: 42.8s • Processed in: 1.4s • Language: EN • 2 Speakers Identified";
     transcriptPlainText.textContent = demoResult.text;
-    if (typeof marked !== "undefined") {
-      summaryContent.innerHTML = marked.parse(demoResult.summary);
-    }
+    summaryContent.innerHTML = renderMarkdown(demoResult.summary);
 
     const urlParams = new URLSearchParams(window.location.search);
     if (urlParams.get("unready") === "polish" || urlParams.get("unready") === "1") {

@@ -42,8 +42,7 @@ class JobStore:
         )
         conn.row_factory = sqlite3.Row
         try:
-            # Enable Write-Ahead Logging and sensible concurrent access defaults
-            conn.execute("PRAGMA journal_mode = WAL;")
+            # Set connection-level pragmas for concurrent access
             conn.execute("PRAGMA synchronous = NORMAL;")
             conn.execute("PRAGMA busy_timeout = 5000;")
             conn.execute("PRAGMA foreign_keys = ON;")
@@ -57,6 +56,9 @@ class JobStore:
             return
 
         with self._lock, self._get_connection() as conn:
+            # Persistent database pragma
+            conn.execute("PRAGMA journal_mode = WAL;")
+
             conn.execute("BEGIN IMMEDIATE;")
             try:
                 # 1. Jobs Table
@@ -115,6 +117,21 @@ class JobStore:
                     );
                     """
                 )
+
+                # Recover orphaned jobs from unclean shutdown/restart
+                cursor = conn.execute(
+                    """
+                    UPDATE jobs
+                    SET status = 'failed',
+                        error = 'Interrupted by server restart',
+                        updated_at = ?
+                    WHERE status NOT IN ('completed', 'failed');
+                    """,
+                    (datetime.now(timezone.utc).isoformat(),),
+                )
+                if cursor.rowcount > 0:
+                    logger.warning("Recovered %d orphaned in-flight jobs as failed", cursor.rowcount)
+
                 conn.execute("COMMIT;")
                 logger.info("Initialized SQLite JobStore at %s", self.db_path)
             except Exception as e:
@@ -208,6 +225,66 @@ class JobStore:
             except Exception as e:
                 conn.execute("ROLLBACK;")
                 logger.error("Failed to save job %s to database: %s", job.job_id, e)
+
+    def update_job_ai_output(
+        self,
+        job_id: str,
+        action: str,
+        text: str,
+        summary_level: str | None = None,
+    ) -> bool:
+        """Update a job's stored AI polish or summary output in SQLite and sync FTS5."""
+        if not self.enabled:
+            return False
+
+        with self._lock, self._get_connection() as conn:
+            conn.execute("BEGIN IMMEDIATE;")
+            try:
+                row = conn.execute("SELECT filename, result_json FROM jobs WHERE job_id = ?;", (job_id,)).fetchone()
+                if not row:
+                    conn.execute("ROLLBACK;")
+                    return False
+
+                result_data: dict[str, Any] = json.loads(row["result_json"]) if row["result_json"] else {}
+                if action == "polish":
+                    result_data["polished"] = text
+                elif action == "summary":
+                    level = summary_level or "bullets"
+                    if "summaries" not in result_data or not isinstance(result_data["summaries"], dict):
+                        result_data["summaries"] = {}
+                    result_data["summaries"][level] = text
+                    result_data["summary"] = text
+                    result_data["summary_level"] = level
+
+                now_iso = datetime.now(timezone.utc).isoformat()
+                new_result_json = json.dumps(result_data)
+
+                conn.execute(
+                    """
+                    UPDATE jobs
+                    SET result_json = ?,
+                        updated_at = ?
+                    WHERE job_id = ?;
+                    """,
+                    (new_result_json, now_iso, job_id),
+                )
+
+                # Resynchronize FTS5 virtual table
+                transcript_text = result_data.get("text", "")
+                summary_text = result_data.get("summary", "")
+                conn.execute("DELETE FROM transcript_fts WHERE job_id = ?;", (job_id,))
+                if transcript_text or summary_text:
+                    conn.execute(
+                        "INSERT INTO transcript_fts (job_id, filename, text, summary) VALUES (?, ?, ?, ?);",
+                        (job_id, row["filename"], transcript_text, summary_text),
+                    )
+
+                conn.execute("COMMIT;")
+                return True
+            except Exception as e:
+                conn.execute("ROLLBACK;")
+                logger.error("Failed to update AI output for job %s: %s", job_id, e)
+                return False
 
     def get_job(self, job_id: str) -> Any | None:
         """Retrieve a stored job by ID and restore it as a Job dataclass instance."""

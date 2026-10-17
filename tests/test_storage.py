@@ -193,3 +193,82 @@ def test_job_store_batches(temp_store):
     assert deleted is True
     assert temp_store.get_batch("batch_alpha") is None
     assert temp_store.get_job("bjob_0") is None
+
+
+def test_orphaned_job_recovery_on_startup(tmp_path):
+    """Verify that in-flight jobs interrupted by restart are recovered as failed upon init_db."""
+    db_file = tmp_path / "recovery_test.db"
+    store = JobStore(db_path=db_file, enabled=True)
+
+    # Insert an in-flight job and a queued job
+    job1 = Job(job_id="job_inflight", filename="audio1.wav", status="transcribing", progress=50)
+    job2 = Job(job_id="job_queued", filename="audio2.wav", status="queued", progress=0)
+    job3 = Job(job_id="job_done", filename="audio3.wav", status="completed", progress=100)
+    store.save_job(job1)
+    store.save_job(job2)
+    store.save_job(job3)
+
+    # Re-initialize store (simulating server restart)
+    restart_store = JobStore(db_path=db_file, enabled=True)
+
+    recovered1 = restart_store.get_job("job_inflight")
+    assert recovered1 is not None
+    assert recovered1.status == "failed"
+    assert recovered1.error == "Interrupted by server restart"
+
+    recovered2 = restart_store.get_job("job_queued")
+    assert recovered2 is not None
+    assert recovered2.status == "failed"
+    assert recovered2.error == "Interrupted by server restart"
+
+    # Completed job should NOT be mutated
+    recovered3 = restart_store.get_job("job_done")
+    assert recovered3 is not None
+    assert recovered3.status == "completed"
+
+
+def test_update_job_ai_output_persistence_and_fts(temp_store):
+    """Verify update_job_ai_output updates result_json and syncs FTS5 search index."""
+    job = Job(
+        job_id="job_ai_test",
+        filename="meeting.wav",
+        status="completed",
+        result={"text": "Quarterly earnings discussion and budget review."},
+    )
+    temp_store.save_job(job)
+
+    # Initial search: budget exists in transcript text
+    assert len(temp_store.search_transcripts("budget")) == 1
+    assert len(temp_store.search_transcripts("synergy")) == 0
+
+    # On-demand AI summary update
+    updated = temp_store.update_job_ai_output(
+        job_id="job_ai_test",
+        action="summary",
+        text="Executive summary: Strategic synergy achieved across all business units.",
+        summary_level="tldr",
+    )
+    assert updated is True
+
+    # Job retrieval should reflect the new summary
+    reloaded = temp_store.get_job("job_ai_test")
+    assert reloaded is not None
+    assert reloaded.result["summary"] == "Executive summary: Strategic synergy achieved across all business units."
+    assert reloaded.result["summaries"]["tldr"] == reloaded.result["summary"]
+    assert reloaded.result["summary_level"] == "tldr"
+
+    # FTS5 should now find the newly added summary keyword
+    fts_results = temp_store.search_transcripts("synergy")
+    assert len(fts_results) == 1
+    assert fts_results[0]["job_id"] == "job_ai_test"
+
+    # On-demand AI polish update
+    updated_polish = temp_store.update_job_ai_output(
+        job_id="job_ai_test",
+        action="polish",
+        text="Quarterly earnings discussion and budget review (polished).",
+    )
+    assert updated_polish is True
+    reloaded2 = temp_store.get_job("job_ai_test")
+    assert reloaded2.result["polished"] == "Quarterly earnings discussion and budget review (polished)."
+

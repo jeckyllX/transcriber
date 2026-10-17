@@ -42,23 +42,21 @@ class TranscriptionResult(BaseModel):
 
     @staticmethod
     def _format_timestamp(seconds: float, srt_format: bool = True) -> str:
-        hrs = int(seconds // 3600)
-        mins = int((seconds % 3600) // 60)
-        secs = int(seconds % 60)
-        millis = int(round((seconds - int(seconds)) * 1000))
+        total_ms = max(0, int(round(seconds * 1000)))
+        total_secs, millis = divmod(total_ms, 1000)
+        hrs, rem = divmod(total_secs, 3600)
+        mins, secs = divmod(rem, 60)
         delimiter = "," if srt_format else "."
         return f"{hrs:02d}:{mins:02d}:{secs:02d}{delimiter}{millis:03d}"
 
     @staticmethod
     def _format_ass_timestamp(seconds: float) -> str:
-        hrs = int(seconds // 3600)
-        mins = int((seconds % 3600) // 60)
-        secs = int(seconds % 60)
-        centis = int(round((seconds - int(seconds)) * 100))
-        if centis >= 100:
-            secs += 1
-            centis -= 100
+        total_cs = max(0, int(round(seconds * 100)))
+        total_secs, centis = divmod(total_cs, 100)
+        hrs, rem = divmod(total_secs, 3600)
+        mins, secs = divmod(rem, 60)
         return f"{hrs}:{mins:02d}:{secs:02d}.{centis:02d}"
+
 
     def get_speaker_turns(self) -> list[dict[str, Any]]:
         """Group consecutive segments by the same speaker into dialogue turns."""

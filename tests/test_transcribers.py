@@ -189,3 +189,25 @@ def test_faster_whisper_and_factory_eviction_lifecycle():
     unloaded = factory.unload_all_idle()
     assert isinstance(unloaded, dict)
 
+
+def test_timestamp_boundary_rounding_rollover():
+    """Verify that fractional second rounding near 0.9995+ rolls over seconds and minutes cleanly."""
+    from transcribers.base import TranscriptionResult
+
+    # 1.9996s -> should roll over to 2.000s, NOT 00:00:01,1000
+    assert TranscriptionResult._format_timestamp(1.9996, srt_format=True) == "00:00:02,000"
+    assert TranscriptionResult._format_timestamp(1.9996, srt_format=False) == "00:00:02.000"
+
+    # 59.9998s -> should roll over to 1 minute, 00:01:00,000
+    assert TranscriptionResult._format_timestamp(59.9998, srt_format=True) == "00:01:00,000"
+
+    # 3599.9999s -> should roll over to 1 hour, 01:00:00,000
+    assert TranscriptionResult._format_timestamp(3599.9999, srt_format=True) == "01:00:00,000"
+
+    # ASS centisecond rollover: 59.996s -> 0:01:00.00
+    assert TranscriptionResult._format_ass_timestamp(59.996) == "0:01:00.00"
+    # Zero second edge case
+    assert TranscriptionResult._format_timestamp(0.0) == "00:00:00,000"
+    assert TranscriptionResult._format_ass_timestamp(0.0) == "0:00:00.00"
+
+
