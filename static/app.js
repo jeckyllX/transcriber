@@ -31,12 +31,20 @@ document.addEventListener("DOMContentLoaded", () => {
 
   const tabUploadBtn = document.getElementById("tab-upload-btn");
   const tabRecordBtn = document.getElementById("tab-record-btn");
+  const tabUrlBtn = document.getElementById("tab-url-btn");
   const dropzonePanel = document.getElementById("dropzone-panel");
   const recorderPanel = document.getElementById("recorder-panel");
+  const urlPanel = document.getElementById("url-panel");
+  const mediaUrlInput = document.getElementById("media-url-input");
+  const clearUrlBtn = document.getElementById("clear-url-btn");
+  const urlExtractorBadge = document.getElementById("url-extractor-badge");
+  const urlCountBadge = document.getElementById("url-count-badge");
   const recordToggleBtn = document.getElementById("record-toggle-btn");
   const recordTimer = document.getElementById("record-timer");
   const recordStatus = document.getElementById("record-status");
   const recordPreview = document.getElementById("record-preview");
+
+  let activeInputTab = "upload"; // 'upload' | 'record' | 'url'
 
   const whisperEngineSelect = document.getElementById("whisper-engine-select");
   const whisperModelSelect = document.getElementById("whisper-model-select");
@@ -379,6 +387,16 @@ document.addEventListener("DOMContentLoaded", () => {
         }
       }
 
+      if (data.url_ingestion && urlExtractorBadge) {
+        if (data.url_ingestion.ytdlp_available) {
+          urlExtractorBadge.className = "text-[10px] px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 font-medium";
+          urlExtractorBadge.textContent = "yt-dlp + Direct";
+        } else {
+          urlExtractorBadge.className = "text-[10px] px-2 py-0.5 rounded-full bg-indigo-500/10 text-indigo-400 border border-indigo-500/20 font-medium";
+          urlExtractorBadge.textContent = "Direct Stream";
+        }
+      }
+
       await loadLlmModels();
     } catch (e) {
       console.error("Status check failed", e);
@@ -542,24 +560,90 @@ document.addEventListener("DOMContentLoaded", () => {
     });
   }
 
-  // Tabs: Upload vs Record
-  tabUploadBtn.addEventListener("click", () => {
-    tabUploadBtn.classList.add("border-indigo-500", "text-indigo-400");
-    tabUploadBtn.classList.remove("border-transparent", "text-slate-400");
-    tabRecordBtn.classList.remove("border-indigo-500", "text-indigo-400");
-    tabRecordBtn.classList.add("border-transparent", "text-slate-400");
-    dropzonePanel.classList.remove("hidden");
-    recorderPanel.classList.add("hidden");
-  });
+  function getParsedUrls() {
+    if (!mediaUrlInput || !mediaUrlInput.value) return [];
+    return mediaUrlInput.value
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter((line) => line.length > 0);
+  }
 
-  tabRecordBtn.addEventListener("click", () => {
-    tabRecordBtn.classList.add("border-indigo-500", "text-indigo-400");
-    tabRecordBtn.classList.remove("border-transparent", "text-slate-400");
-    tabUploadBtn.classList.remove("border-indigo-500", "text-indigo-400");
-    tabUploadBtn.classList.add("border-transparent", "text-slate-400");
-    recorderPanel.classList.remove("hidden");
-    dropzonePanel.classList.add("hidden");
-  });
+  function updateStartProcessBtnLabel() {
+    if (!startProcessBtn) return;
+    if (activeInputTab === "url") {
+      const urls = getParsedUrls();
+      if (urls.length > 1) {
+        startProcessBtn.innerHTML = `<i data-lucide="layers" class="w-4 h-4"></i> Start Batch URL Processing (${urls.length} URLs)`;
+      } else {
+        startProcessBtn.innerHTML = '<i data-lucide="play" class="w-4 h-4"></i> Fetch URL & Start Transcription';
+      }
+    } else if (activeInputTab === "upload" && selectedFiles.length > 1) {
+      startProcessBtn.innerHTML = `<i data-lucide="layers" class="w-4 h-4"></i> Start Batch Processing (${selectedFiles.length} files)`;
+    } else {
+      startProcessBtn.innerHTML = '<i data-lucide="play" class="w-4 h-4"></i> Start Transcription & Processing';
+    }
+    if (typeof lucide !== "undefined") lucide.createIcons();
+  }
+
+  function updateUrlInputState() {
+    const urls = getParsedUrls();
+    if (clearUrlBtn) {
+      if (urls.length > 0 || (mediaUrlInput && mediaUrlInput.value.length > 0)) {
+        clearUrlBtn.classList.remove("hidden");
+      } else {
+        clearUrlBtn.classList.add("hidden");
+      }
+    }
+    if (urlCountBadge) {
+      if (urls.length > 1) {
+        urlCountBadge.textContent = `${urls.length} URLs queued (Batch Mode)`;
+        urlCountBadge.classList.remove("hidden");
+      } else {
+        urlCountBadge.classList.add("hidden");
+      }
+    }
+    if (activeInputTab === "url") {
+      updateStartProcessBtnLabel();
+    }
+  }
+
+  function setActiveInputTab(tab) {
+    activeInputTab = tab;
+    const tabs = [
+      { key: "upload", btn: tabUploadBtn, panel: dropzonePanel },
+      { key: "record", btn: tabRecordBtn, panel: recorderPanel },
+      { key: "url", btn: tabUrlBtn, panel: urlPanel },
+    ];
+    tabs.forEach(({ key, btn, panel }) => {
+      if (!btn || !panel) return;
+      if (key === tab) {
+        btn.classList.add("border-indigo-500", "text-indigo-400");
+        btn.classList.remove("border-transparent", "text-slate-400");
+        panel.classList.remove("hidden");
+      } else {
+        btn.classList.remove("border-indigo-500", "text-indigo-400");
+        btn.classList.add("border-transparent", "text-slate-400");
+        panel.classList.add("hidden");
+      }
+    });
+    updateStartProcessBtnLabel();
+  }
+
+  // Tabs: Upload vs Record vs From URL
+  tabUploadBtn.addEventListener("click", () => setActiveInputTab("upload"));
+  tabRecordBtn.addEventListener("click", () => setActiveInputTab("record"));
+  if (tabUrlBtn) {
+    tabUrlBtn.addEventListener("click", () => setActiveInputTab("url"));
+  }
+  if (mediaUrlInput) {
+    mediaUrlInput.addEventListener("input", updateUrlInputState);
+  }
+  if (clearUrlBtn) {
+    clearUrlBtn.addEventListener("click", () => {
+      if (mediaUrlInput) mediaUrlInput.value = "";
+      updateUrlInputState();
+    });
+  }
 
   // Dropzone handling
   dropzone.addEventListener("click", () => audioFileInput.click());
@@ -1240,6 +1324,130 @@ document.addEventListener("DOMContentLoaded", () => {
     if (typeof lucide !== "undefined") lucide.createIcons();
   }
 
+  function attachBatchEventSource(batchId) {
+    const batchEventSource = new EventSource(`/api/batches/${batchId}/stream`);
+
+    batchEventSource.addEventListener("batch_status", (e) => {
+      const summary = JSON.parse(e.data);
+      renderBatchStatus(summary);
+    });
+
+    batchEventSource.addEventListener("batch_progress", (e) => {
+      const payload = JSON.parse(e.data);
+      if (payload.summary) {
+        renderBatchStatus(payload.summary);
+      }
+    });
+
+    batchEventSource.addEventListener("batch_completed", (e) => {
+      const summary = JSON.parse(e.data);
+      renderBatchStatus(summary);
+      batchEventSource.close();
+      startProcessBtn.disabled = false;
+      startProcessBtn.classList.remove("opacity-50", "cursor-not-allowed");
+      if (downloadBatchZipBtn) downloadBatchZipBtn.classList.remove("hidden");
+      updateHistoryBadge();
+    });
+
+    batchEventSource.onerror = () => {
+      batchEventSource.close();
+      startProcessBtn.disabled = false;
+      startProcessBtn.classList.remove("opacity-50", "cursor-not-allowed");
+    };
+  }
+
+  function attachJobEventSource(jobId) {
+    const eventSource = new EventSource(`/api/jobs/${jobId}/stream`);
+
+    eventSource.addEventListener("status", (e) => {
+      const data = JSON.parse(e.data);
+      updateProgressBar(data.progress, data.message, `${data.progress}%`);
+    });
+
+    eventSource.addEventListener("diarization", (e) => {
+      const data = JSON.parse(e.data);
+      updateProgressBar(65, `Diarization complete (${data.num_speakers} speakers detected)`, "65%");
+    });
+
+    eventSource.addEventListener("speaker_renamed", (e) => {
+      const data = JSON.parse(e.data);
+      if (data.speaker_turns) {
+        currentResult.speaker_turns = data.speaker_turns;
+        renderSpeakerDialogue(currentResult);
+      }
+    });
+
+    eventSource.addEventListener("segment", (e) => {
+      const seg = JSON.parse(e.data);
+      currentResult.segments.push(seg);
+      appendLiveSegment(seg);
+    });
+
+    eventSource.addEventListener("ai_token", (e) => {
+      const data = JSON.parse(e.data);
+      if (data.action === "polish") {
+        currentResult.polished += data.token;
+        polishContent.textContent = currentResult.polished;
+        switchResultTab("polish");
+      } else if (data.action === "summary") {
+        currentResult.summary += data.token;
+        summaryContent.innerHTML = renderMarkdown(currentResult.summary);
+        switchResultTab("summary");
+      }
+    });
+
+    eventSource.addEventListener("completed", (e) => {
+      const finalResult = JSON.parse(e.data);
+      eventSource.close();
+      progressContainer.classList.add("hidden");
+      startProcessBtn.disabled = false;
+      startProcessBtn.classList.remove("opacity-50", "cursor-not-allowed");
+
+      displayCompletedResult(finalResult);
+      updateHistoryBadge();
+    });
+
+    eventSource.addEventListener("failed", (e) => {
+      const data = JSON.parse(e.data);
+      eventSource.close();
+      progressContainer.classList.add("hidden");
+      startProcessBtn.disabled = false;
+      startProcessBtn.classList.remove("opacity-50", "cursor-not-allowed");
+      alert("Processing failed: " + data.error);
+    });
+
+    eventSource.onerror = () => {
+      eventSource.close();
+      progressContainer.classList.add("hidden");
+      startProcessBtn.disabled = false;
+      startProcessBtn.classList.remove("opacity-50", "cursor-not-allowed");
+    };
+  }
+
+  function resetSingleJobResultView() {
+    resultsContainer.classList.remove("hidden");
+    if (batchStatusPanel) batchStatusPanel.classList.add("hidden");
+    if (batchFileSelectorBox) batchFileSelectorBox.classList.add("hidden");
+    if (downloadBatchZipBtn) downloadBatchZipBtn.classList.add("hidden");
+
+    transcriptSegmentsList.innerHTML = "";
+    transcriptPlainText.textContent = "";
+    polishContent.textContent = "";
+    summaryContent.innerHTML = "";
+    if (polishToolbar) polishToolbar.classList.add("hidden");
+    if (summaryToolbar) summaryToolbar.classList.add("hidden");
+    if (tabBadgePolish) tabBadgePolish.classList.add("hidden");
+    if (tabBadgeSummary) tabBadgeSummary.classList.add("hidden");
+    currentResult.segments = [];
+    currentResult.text = "";
+    currentResult.polished = "";
+    currentResult.summary = "";
+    currentResult.summaries = {};
+    currentResult.summary_level = activeSummaryLevel || "bullets";
+
+    switchResultTab("transcript");
+  }
+
   async function submitBatchJobs() {
     startProcessBtn.disabled = true;
     startProcessBtn.classList.add("opacity-50", "cursor-not-allowed");
@@ -1278,40 +1486,101 @@ document.addEventListener("DOMContentLoaded", () => {
       const data = await resp.json();
       currentBatchId = data.batch_id;
       renderBatchStatus(data.summary);
-
-      // Connect to Batch SSE Stream
-      const batchEventSource = new EventSource(`/api/batches/${currentBatchId}/stream`);
-
-      batchEventSource.addEventListener("batch_status", (e) => {
-        const summary = JSON.parse(e.data);
-        renderBatchStatus(summary);
-      });
-
-      batchEventSource.addEventListener("batch_progress", (e) => {
-        const payload = JSON.parse(e.data);
-        if (payload.summary) {
-          renderBatchStatus(payload.summary);
-        }
-      });
-
-      batchEventSource.addEventListener("batch_completed", (e) => {
-        const summary = JSON.parse(e.data);
-        renderBatchStatus(summary);
-        batchEventSource.close();
-        startProcessBtn.disabled = false;
-        startProcessBtn.classList.remove("opacity-50", "cursor-not-allowed");
-        if (downloadBatchZipBtn) downloadBatchZipBtn.classList.remove("hidden");
-        updateHistoryBadge();
-      });
-
-      batchEventSource.onerror = () => {
-        batchEventSource.close();
-        startProcessBtn.disabled = false;
-        startProcessBtn.classList.remove("opacity-50", "cursor-not-allowed");
-      };
-
+      attachBatchEventSource(currentBatchId);
     } catch (err) {
       alert("Batch submission error: " + err.message);
+      startProcessBtn.disabled = false;
+      startProcessBtn.classList.remove("opacity-50", "cursor-not-allowed");
+    }
+  }
+
+  async function submitBatchUrlJobs(urls) {
+    startProcessBtn.disabled = true;
+    startProcessBtn.classList.add("opacity-50", "cursor-not-allowed");
+    resultsContainer.classList.remove("hidden");
+    if (batchStatusPanel) batchStatusPanel.classList.remove("hidden");
+    if (batchFileSelectorBox) batchFileSelectorBox.classList.remove("hidden");
+    if (downloadBatchZipBtn) downloadBatchZipBtn.classList.add("hidden");
+
+    batchResultsMap = {};
+    if (batchFileSelect) batchFileSelect.innerHTML = "";
+    updateProgressBar(5, `Queuing ${urls.length} URLs for batch download & transcription...`, `0/${urls.length}`);
+
+    try {
+      const resp = await fetch("/api/jobs/batch-urls", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          urls: urls,
+          whisper_engine: whisperEngineSelect.value,
+          whisper_model: whisperModelSelect.value,
+          language: languageSelect.value,
+          vad_filter: vadCheckbox ? vadCheckbox.checked : true,
+          clean_audio: cleanAudioCheckbox ? cleanAudioCheckbox.checked : false,
+          enable_diarization: diarizationCheckbox ? diarizationCheckbox.checked : false,
+          num_speakers: numSpeakersSelect ? parseInt(numSpeakersSelect.value, 10) : -1,
+          ai_action: activeAiAction,
+          summary_level: activeSummaryLevel,
+          llm_provider: llmProviderSelect.value,
+          llm_model: llmModelSelect.value,
+          notify: notifyCheckbox.checked,
+        }),
+      });
+      if (!resp.ok) {
+        const err = await resp.json();
+        throw new Error(err.detail || "Batch URL submission failed.");
+      }
+      const data = await resp.json();
+      currentBatchId = data.batch_id;
+      renderBatchStatus(data.summary);
+      attachBatchEventSource(currentBatchId);
+    } catch (err) {
+      alert("Batch URL submission error: " + err.message);
+      progressContainer.classList.add("hidden");
+      startProcessBtn.disabled = false;
+      startProcessBtn.classList.remove("opacity-50", "cursor-not-allowed");
+    }
+  }
+
+  async function submitUrlJob(url) {
+    startProcessBtn.disabled = true;
+    startProcessBtn.classList.add("opacity-50", "cursor-not-allowed");
+    resetSingleJobResultView();
+    updateProgressBar(8, "Queuing URL for media download...", "Queued");
+
+    try {
+      const jobRes = await fetch("/api/jobs/url", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          url: url,
+          whisper_engine: whisperEngineSelect.value,
+          whisper_model: whisperModelSelect.value,
+          language: languageSelect.value,
+          vad_filter: vadCheckbox ? vadCheckbox.checked : true,
+          clean_audio: cleanAudioCheckbox ? cleanAudioCheckbox.checked : false,
+          enable_diarization: diarizationCheckbox ? diarizationCheckbox.checked : false,
+          num_speakers: numSpeakersSelect ? parseInt(numSpeakersSelect.value, 10) : -1,
+          ai_action: activeAiAction,
+          summary_level: activeSummaryLevel,
+          llm_provider: llmProviderSelect.value,
+          llm_model: llmModelSelect.value,
+          notify: notifyCheckbox.checked,
+        }),
+      });
+
+      if (!jobRes.ok) {
+        const err = await jobRes.json();
+        throw new Error(err.detail || "Failed to submit URL job.");
+      }
+
+      const { job_id } = await jobRes.json();
+      currentResult.task_id = job_id;
+      currentResult.filename = url;
+      attachJobEventSource(job_id);
+    } catch (err) {
+      alert("Error: " + err.message);
+      progressContainer.classList.add("hidden");
       startProcessBtn.disabled = false;
       startProcessBtn.classList.remove("opacity-50", "cursor-not-allowed");
     }
@@ -1335,40 +1604,31 @@ document.addEventListener("DOMContentLoaded", () => {
 
   // Primary Execution via Async Background Job Queue & SSE Stream
   startProcessBtn.addEventListener("click", async () => {
+    const parsedUrls = getParsedUrls();
+    if (activeInputTab === "url" || (!selectedFile && !recordedBlob && selectedFiles.length === 0 && parsedUrls.length > 0)) {
+      if (parsedUrls.length === 0) {
+        alert("Please enter at least one valid HTTP/HTTPS media URL.");
+        return;
+      }
+      if (parsedUrls.length > 1) {
+        return submitBatchUrlJobs(parsedUrls);
+      }
+      return submitUrlJob(parsedUrls[0]);
+    }
+
     if (selectedFiles.length > 1) {
       return submitBatchJobs();
     }
 
     const fileToUpload = selectedFile || (recordedBlob ? new File([recordedBlob], "mic.webm", { type: "audio/webm" }) : null);
     if (!fileToUpload) {
-      alert("Please upload an audio/video file or record with your microphone first.");
+      alert("Please upload an audio/video file, record with your microphone, or enter a media URL first.");
       return;
     }
 
     startProcessBtn.disabled = true;
     startProcessBtn.classList.add("opacity-50", "cursor-not-allowed");
-    resultsContainer.classList.remove("hidden");
-    if (batchStatusPanel) batchStatusPanel.classList.add("hidden");
-    if (batchFileSelectorBox) batchFileSelectorBox.classList.add("hidden");
-    if (downloadBatchZipBtn) downloadBatchZipBtn.classList.add("hidden");
-
-    // Reset results views
-    transcriptSegmentsList.innerHTML = "";
-    transcriptPlainText.textContent = "";
-    polishContent.textContent = "";
-    summaryContent.innerHTML = "";
-    if (polishToolbar) polishToolbar.classList.add("hidden");
-    if (summaryToolbar) summaryToolbar.classList.add("hidden");
-    if (tabBadgePolish) tabBadgePolish.classList.add("hidden");
-    if (tabBadgeSummary) tabBadgeSummary.classList.add("hidden");
-    currentResult.segments = [];
-    currentResult.text = "";
-    currentResult.polished = "";
-    currentResult.summary = "";
-    currentResult.summaries = {};
-    currentResult.summary_level = activeSummaryLevel || "bullets";
-
-    switchResultTab("transcript");
+    resetSingleJobResultView();
     updateProgressBar(10, "Uploading media and queuing job...", "Queued");
 
     try {
@@ -1401,73 +1661,7 @@ document.addEventListener("DOMContentLoaded", () => {
       currentResult.task_id = job_id;
       currentResult.filename = fileToUpload.name;
 
-      // Connect to Server-Sent Events stream for real-time progress
-      const eventSource = new EventSource(`/api/jobs/${job_id}/stream`);
-
-      eventSource.addEventListener("status", (e) => {
-        const data = JSON.parse(e.data);
-        updateProgressBar(data.progress, data.message, `${data.progress}%`);
-      });
-
-      eventSource.addEventListener("diarization", (e) => {
-        const data = JSON.parse(e.data);
-        updateProgressBar(65, `Diarization complete (${data.num_speakers} speakers detected)`, "65%");
-      });
-
-      eventSource.addEventListener("speaker_renamed", (e) => {
-        const data = JSON.parse(e.data);
-        if (data.speaker_turns) {
-          currentResult.speaker_turns = data.speaker_turns;
-          renderSpeakerDialogue(currentResult);
-        }
-      });
-
-      eventSource.addEventListener("segment", (e) => {
-        const seg = JSON.parse(e.data);
-        currentResult.segments.push(seg);
-        appendLiveSegment(seg);
-      });
-
-      eventSource.addEventListener("ai_token", (e) => {
-        const data = JSON.parse(e.data);
-        if (data.action === "polish") {
-          currentResult.polished += data.token;
-          polishContent.textContent = currentResult.polished;
-          switchResultTab("polish");
-        } else if (data.action === "summary") {
-          currentResult.summary += data.token;
-          summaryContent.innerHTML = renderMarkdown(currentResult.summary);
-          switchResultTab("summary");
-        }
-      });
-
-      eventSource.addEventListener("completed", (e) => {
-        const finalResult = JSON.parse(e.data);
-        eventSource.close();
-        progressContainer.classList.add("hidden");
-        startProcessBtn.disabled = false;
-        startProcessBtn.classList.remove("opacity-50", "cursor-not-allowed");
-
-        displayCompletedResult(finalResult);
-        updateHistoryBadge();
-      });
-
-      eventSource.addEventListener("failed", (e) => {
-        const data = JSON.parse(e.data);
-        eventSource.close();
-        progressContainer.classList.add("hidden");
-        startProcessBtn.disabled = false;
-        startProcessBtn.classList.remove("opacity-50", "cursor-not-allowed");
-        alert("Processing failed: " + data.error);
-      });
-
-      eventSource.onerror = (err) => {
-        eventSource.close();
-        progressContainer.classList.add("hidden");
-        startProcessBtn.disabled = false;
-        startProcessBtn.classList.remove("opacity-50", "cursor-not-allowed");
-      };
-
+      attachJobEventSource(job_id);
     } catch (err) {
       alert("Error: " + err.message);
       progressContainer.classList.add("hidden");
@@ -2171,19 +2365,51 @@ document.addEventListener("DOMContentLoaded", () => {
       const formData = new FormData();
       formData.append("model_name", modelName);
       const res = await fetch("/api/llm/pull", { method: "POST", body: formData });
+      if (!res.ok) {
+        let errDetail = `Server returned ${res.status}`;
+        try {
+          const errJson = await res.json();
+          if (errJson.detail) errDetail = errJson.detail;
+        } catch (_) {}
+        throw new Error(errDetail);
+      }
+
       const reader = res.body.getReader();
       const decoder = new TextDecoder();
+      let buffer = "";
 
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
-        const chunk = decoder.decode(value);
-        pullModelStatus.textContent = chunk.slice(-80);
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split("\n");
+        buffer = lines.pop() || "";
+        for (const line of lines) {
+          const trimmed = line.trim();
+          if (!trimmed.startsWith("data:")) continue;
+          const payloadStr = trimmed.slice(5).trim();
+          if (!payloadStr) continue;
+          let parsed = null;
+          try {
+            parsed = JSON.parse(payloadStr);
+          } catch (_) {
+            continue;
+          }
+          if (parsed.status === "error" || parsed.error) {
+            throw new Error(parsed.message || parsed.error || "Failed to pull model.");
+          }
+          if (parsed.status) {
+            const pct = parsed.total && parsed.completed
+              ? ` (${Math.round((parsed.completed / parsed.total) * 100)}%)`
+              : "";
+            pullModelStatus.textContent = `${parsed.status}${pct}`;
+          }
+        }
       }
-      pullModelStatus.innerHTML = `<span class="text-emerald-400">✅ Model '${modelName}' pulled successfully!</span>`;
+      pullModelStatus.innerHTML = `<span class="text-emerald-400">✅ Model '${escapeHtml(modelName)}' pulled successfully!</span>`;
       await loadLlmModels();
     } catch (e) {
-      pullModelStatus.innerHTML = `<span class="text-red-400">❌ Pull failed: ${e.message}</span>`;
+      pullModelStatus.innerHTML = `<span class="text-red-400">❌ Pull failed: ${escapeHtml(e.message)}</span>`;
     } finally {
       pullModelBtn.disabled = false;
     }
@@ -2205,6 +2431,7 @@ document.addEventListener("DOMContentLoaded", () => {
     switch (status) {
       case "completed":
         return `<span class="px-2 py-0.5 rounded-full text-[10px] font-medium bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">Completed</span>`;
+      case "downloading":
       case "processing":
       case "converting":
       case "transcribing":
@@ -2312,7 +2539,7 @@ document.addEventListener("DOMContentLoaded", () => {
                 <i data-lucide="external-link" class="w-3.5 h-3.5"></i>
                 <span>Open</span>
               </button>` : ""}
-              ${(job.status === "queued" || job.status === "converting" || job.status === "transcribing" || job.status === "processing_ai") ? `
+              ${(job.status === "queued" || job.status === "downloading" || job.status === "converting" || job.status === "transcribing" || job.status === "processing_ai") ? `
               <span class="px-2 py-1 rounded-md text-[10px] text-amber-400/90 bg-amber-500/10 border border-amber-500/20 flex items-center gap-1">
                 <i data-lucide="loader-2" class="w-3 h-3 animate-spin"></i> Processing
               </span>` : ""}

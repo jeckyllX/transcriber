@@ -6,6 +6,7 @@ document attachments with automatic character splitting for long texts.
 
 from __future__ import annotations
 
+import html
 import logging
 from pathlib import Path
 from typing import Optional
@@ -38,16 +39,20 @@ class TelegramNotifier(BaseNotifier):
         duration_min = f"{payload.duration_seconds / 60:.1f} min" if payload.duration_seconds > 0 else "N/A"
         proc_time = f"{payload.processing_time_seconds:.1f}s"
 
+        safe_filename = html.escape(payload.filename or "Audio")
+        safe_whisper = html.escape(payload.whisper_model or "base")
+
         lines = [
             "🎙 <b>Audio Transcription Complete</b>",
-            f"📁 <b>File:</b> <code>{payload.filename}</code>",
+            f"📁 <b>File:</b> <code>{safe_filename}</code>",
             f"⏱ <b>Duration:</b> {duration_min} | <b>Processing:</b> {proc_time}",
-            f"⚙️ <b>Model:</b> Whisper ({payload.whisper_model})",
+            f"⚙️ <b>Model:</b> Whisper ({safe_whisper})",
         ]
 
         if payload.llm_model:
-            mode_label = (payload.summary_type or "Processed").capitalize()
-            lines.append(f"🤖 <b>AI ({mode_label}):</b> {payload.llm_model}")
+            mode_label = html.escape((payload.summary_type or "Processed").capitalize())
+            safe_llm = html.escape(payload.llm_model)
+            lines.append(f"🤖 <b>AI ({mode_label}):</b> {safe_llm}")
 
         lines.append("")
 
@@ -56,19 +61,25 @@ class TelegramNotifier(BaseNotifier):
             lines.append("📋 <b>Summary:</b>")
             summary_preview = payload.summary_text.strip()
             if len(summary_preview) > 2500:
-                summary_preview = summary_preview[:2500] + "...\n<i>(Full content in attached file)</i>"
+                summary_preview = html.escape(summary_preview[:2500]) + "...\n<i>(Full content in attached file)</i>"
+            else:
+                summary_preview = html.escape(summary_preview)
             lines.append(summary_preview)
         elif payload.polished_text:
             lines.append("✨ <b>Polished Transcript:</b>")
             polish_preview = payload.polished_text.strip()
             if len(polish_preview) > 2500:
-                polish_preview = polish_preview[:2500] + "...\n<i>(Full content in attached file)</i>"
+                polish_preview = html.escape(polish_preview[:2500]) + "...\n<i>(Full content in attached file)</i>"
+            else:
+                polish_preview = html.escape(polish_preview)
             lines.append(polish_preview)
         elif payload.transcript_text:
             lines.append("📝 <b>Transcript:</b>")
             trans_preview = payload.transcript_text.strip()
             if len(trans_preview) > 2500:
-                trans_preview = trans_preview[:2500] + "...\n<i>(Full content in attached file)</i>"
+                trans_preview = html.escape(trans_preview[:2500]) + "...\n<i>(Full content in attached file)</i>"
+            else:
+                trans_preview = html.escape(trans_preview)
             lines.append(trans_preview)
 
         return "\n".join(lines)

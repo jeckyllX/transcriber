@@ -71,6 +71,36 @@ _audio_cfg = _cfg.get("audio", {})
 _storage_cfg = _cfg.get("storage", {})
 
 
+def _cfg_bool(section: dict[str, Any], key: str, env_var: str | None, default: bool) -> bool:
+    """Resolve boolean setting prioritizing explicit config.json value over environment and default."""
+    if key in section and section[key] is not None:
+        val = section[key]
+        if isinstance(val, str):
+            return val.strip().lower() in ("1", "true", "yes")
+        return bool(val)
+    if env_var and env_var in os.environ:
+        return os.environ[env_var].strip().lower() in ("1", "true", "yes")
+    return default
+
+
+def _cfg_int(section: dict[str, Any], key: str, env_var: str | None, default: int) -> int:
+    """Resolve integer setting prioritizing explicit config.json value (including 0) over environment."""
+    if key in section and section[key] is not None:
+        return int(section[key])
+    if env_var and env_var in os.environ and os.environ[env_var].strip():
+        return int(os.environ[env_var].strip())
+    return default
+
+
+def _cfg_float(section: dict[str, Any], key: str, env_var: str | None, default: float) -> float:
+    """Resolve float setting prioritizing explicit config.json value (including 0.0) over environment."""
+    if key in section and section[key] is not None:
+        return float(section[key])
+    if env_var and env_var in os.environ and os.environ[env_var].strip():
+        return float(os.environ[env_var].strip())
+    return default
+
+
 class Settings(BaseModel):
     """Application settings loaded from config.json with fallback to environment."""
 
@@ -79,13 +109,13 @@ class Settings(BaseModel):
         default_factory=lambda: _server_cfg.get("host") or os.getenv("HOST", "127.0.0.1")
     )
     port: int = Field(
-        default_factory=lambda: int(_server_cfg.get("port") or os.getenv("PORT", "8000"))
+        default_factory=lambda: _cfg_int(_server_cfg, "port", "PORT", 8000)
     )
     debug: bool = Field(
-        default_factory=lambda: bool(_server_cfg.get("debug", False)) or os.getenv("DEBUG", "false").lower() in ("1", "true", "yes")
+        default_factory=lambda: _cfg_bool(_server_cfg, "debug", "DEBUG", False)
     )
     max_concurrent_jobs: int = Field(
-        default_factory=lambda: int(_server_cfg.get("max_concurrent_jobs") or os.getenv("MAX_CONCURRENT_JOBS", "1"))
+        default_factory=lambda: _cfg_int(_server_cfg, "max_concurrent_jobs", "MAX_CONCURRENT_JOBS", 1)
     )
 
     # Whisper Settings
@@ -99,24 +129,24 @@ class Settings(BaseModel):
         default_factory=lambda: _whisper_cfg.get("bin_path") or os.getenv("WHISPER_BIN_PATH") or find_binary("whisper-cli") or find_binary("main")
     )
     use_in_memory_pcm: bool = Field(
-        default_factory=lambda: bool(_whisper_cfg.get("use_in_memory_pcm", True))
+        default_factory=lambda: _cfg_bool(_whisper_cfg, "use_in_memory_pcm", "USE_IN_MEMORY_PCM", True)
     )
     whisper_models_dir: Path = Field(
         default_factory=lambda: Path(_whisper_cfg.get("models_dir") or os.getenv("WHISPER_MODELS_DIR", str(MODELS_DIR)))
     )
     model_idle_timeout_seconds: int = Field(
-        default_factory=lambda: int(
-            _whisper_cfg.get("model_idle_timeout_seconds")
-            or os.getenv("MODEL_IDLE_TIMEOUT_SECONDS", "1800")
-        )
+        default_factory=lambda: _cfg_int(_whisper_cfg, "model_idle_timeout_seconds", "MODEL_IDLE_TIMEOUT_SECONDS", 1800)
     )
 
-    # Audio Processor Settings
+    # Audio Processor & URL Ingestion Settings
     ffmpeg_bin: str | None = Field(
         default_factory=lambda: os.getenv("FFMPEG_BIN_PATH") or find_binary("ffmpeg")
     )
     ffprobe_bin: str | None = Field(
         default_factory=lambda: os.getenv("FFPROBE_BIN_PATH") or find_binary("ffprobe")
+    )
+    ytdlp_bin: str | None = Field(
+        default_factory=lambda: _audio_cfg.get("ytdlp_bin") or os.getenv("YTDLP_BIN_PATH") or find_binary("yt-dlp")
     )
     audio_enhancement_filter: str = Field(
         default_factory=lambda: _audio_cfg.get("enhancement_filter")
@@ -124,6 +154,15 @@ class Settings(BaseModel):
             "AUDIO_ENHANCEMENT_FILTER",
             "highpass=f=80,afftdn=nf=-25,loudnorm=I=-16:TP=-1.5:LRA=11",
         )
+    )
+    url_max_download_size_mb: int = Field(
+        default_factory=lambda: _cfg_int(_audio_cfg, "url_max_download_size_mb", "URL_MAX_DOWNLOAD_SIZE_MB", 500)
+    )
+    url_download_timeout_seconds: int = Field(
+        default_factory=lambda: _cfg_int(_audio_cfg, "url_download_timeout_seconds", "URL_DOWNLOAD_TIMEOUT_SECONDS", 600)
+    )
+    url_allow_local_network: bool = Field(
+        default_factory=lambda: _cfg_bool(_audio_cfg, "url_allow_local_network", "URL_ALLOW_LOCAL_NETWORK", False)
     )
 
     # LLM Provider - Ollama
@@ -175,7 +214,7 @@ class Settings(BaseModel):
 
     # Notifications - Telegram
     telegram_enabled: bool = Field(
-        default_factory=lambda: bool(_telegram_cfg.get("enabled", False)) or os.getenv("TELEGRAM_ENABLED", "false").lower() in ("1", "true", "yes")
+        default_factory=lambda: _cfg_bool(_telegram_cfg, "enabled", "TELEGRAM_ENABLED", False)
     )
     telegram_bot_token: str | None = Field(
         default_factory=lambda: _telegram_cfg.get("bot_token") or os.getenv("TELEGRAM_BOT_TOKEN")
@@ -186,7 +225,7 @@ class Settings(BaseModel):
 
     # Notifications - Generic Webhook
     webhook_enabled: bool = Field(
-        default_factory=lambda: bool(_webhook_cfg.get("enabled", False)) or os.getenv("WEBHOOK_ENABLED", "false").lower() in ("1", "true", "yes")
+        default_factory=lambda: _cfg_bool(_webhook_cfg, "enabled", "WEBHOOK_ENABLED", False)
     )
     webhook_url: str | None = Field(
         default_factory=lambda: _webhook_cfg.get("url") or os.getenv("WEBHOOK_URL")
@@ -197,7 +236,7 @@ class Settings(BaseModel):
 
     # Speaker Diarization Settings (Sherpa-ONNX)
     diarization_enabled: bool = Field(
-        default_factory=lambda: bool(_diarization_cfg.get("enabled", True)) or os.getenv("DIARIZATION_ENABLED", "true").lower() in ("1", "true", "yes")
+        default_factory=lambda: _cfg_bool(_diarization_cfg, "enabled", "DIARIZATION_ENABLED", True)
     )
     diarization_seg_model: str = Field(
         default_factory=lambda: _diarization_cfg.get("seg_model") or os.getenv("DIARIZATION_SEG_MODEL", "sherpa-onnx-pyannote-segmentation-3-0/model.onnx")
@@ -206,18 +245,18 @@ class Settings(BaseModel):
         default_factory=lambda: _diarization_cfg.get("emb_model") or os.getenv("DIARIZATION_EMB_MODEL", "3dspeaker_speech_eres2net_base_sv_zh-cn_3dspeaker_16k.onnx")
     )
     diarization_threshold: float = Field(
-        default_factory=lambda: float(_diarization_cfg.get("threshold", 0.5) if _diarization_cfg.get("threshold") is not None else os.getenv("DIARIZATION_THRESHOLD", "0.5"))
+        default_factory=lambda: _cfg_float(_diarization_cfg, "threshold", "DIARIZATION_THRESHOLD", 0.5)
     )
 
     # Storage & History Settings (SQLite + Full-Text Search FTS5)
     storage_enabled: bool = Field(
-        default_factory=lambda: bool(_storage_cfg.get("enabled", True)) or os.getenv("STORAGE_ENABLED", "true").lower() in ("1", "true", "yes")
+        default_factory=lambda: _cfg_bool(_storage_cfg, "enabled", "STORAGE_ENABLED", True)
     )
     storage_db_path: Path = Field(
         default_factory=lambda: Path(_storage_cfg.get("db_path") or os.getenv("STORAGE_DB_PATH", str(DATA_DIR / "transcriptions.db")))
     )
     history_page_size: int = Field(
-        default_factory=lambda: int(_storage_cfg.get("page_size", 20) or os.getenv("HISTORY_PAGE_SIZE", "20"))
+        default_factory=lambda: _cfg_int(_storage_cfg, "page_size", "HISTORY_PAGE_SIZE", 20)
     )
 
 
@@ -275,9 +314,21 @@ def _strip_masked_values(payload: Any) -> Any:
 def _resolve_setting_attr(section: str, key: str) -> str | None:
     """Map a config ``section.key`` pair to the corresponding Settings attribute name."""
     if section == "whisper":
-        return f"default_whisper_{key}" if key in ("engine", "model") else f"whisper_{key}"
+        if key in ("engine", "model"):
+            return f"default_whisper_{key}"
+        if key in ("default_engine", "default_model"):
+            return f"default_whisper_{key.removeprefix('default_')}"
+        if key in ("use_in_memory_pcm", "model_idle_timeout_seconds"):
+            return key
+        if key == "bin_path":
+            return "whisper_bin"
+        return f"whisper_{key}"
     if section == "server":
         return key
+    if section == "audio":
+        if key in ("ytdlp_bin", "url_max_download_size_mb", "url_download_timeout_seconds", "url_allow_local_network"):
+            return key
+        return f"audio_{key}"
     if section == "ollama":
         return "default_ollama_model" if key == "default_model" else f"ollama_{key}"
     if section == "openai_compatible":

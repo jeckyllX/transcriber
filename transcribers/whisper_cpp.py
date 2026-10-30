@@ -71,7 +71,7 @@ class WhisperCppTranscriber(BaseTranscriber):
                 # Write array to temporary WAV for whisper.cpp CLI input
                 import wave
                 audio_path = Path(tmp_dir) / "input.wav"
-                pcm_16 = (audio * 32767.0).astype(np.int16)
+                pcm_16 = (np.clip(audio, -1.0, 1.0) * 32767.0).astype(np.int16)
                 with wave.open(str(audio_path), "wb") as wf:
                     wf.setnchannels(1)
                     wf.setsampwidth(2)

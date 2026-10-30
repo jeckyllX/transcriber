@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 import shutil
 import time
 import uuid
@@ -25,6 +26,7 @@ import httpx
 
 from config import BASE_DIR, STATIC_DIR, TEMPLATES_DIR, UPLOADS_DIR, settings, save_config, get_masked_settings
 from audio_processor import AudioProcessor, AudioProcessorError
+from url_ingestor import MediaURLIngestor, URLIngestionError, sanitize_filename
 from transcribers import transcriber_factory, AsyncModelEvictionMonitor
 from transcribers.streaming import LiveTranscriptionSession
 from llm import llm_registry, get_polish_prompt, get_summary_prompt, ChunkedSummarizer
@@ -44,8 +46,43 @@ model_eviction_monitor = AsyncModelEvictionMonitor(
 )
 
 
+def _cleanup_orphaned_uploads(uploads_dir: Path | None = None) -> int:
+    """Remove leftover temporary upload or conversion files from interrupted sessions."""
+    target_dir = uploads_dir or UPLOADS_DIR
+    if not target_dir.is_dir():
+        return 0
+    removed = 0
+    for p in target_dir.iterdir():
+        if p.is_file() and (
+            p.name.endswith("_16k.wav")
+            or "_upload" in p.name
+            or "_raw" in p.name
+            or "_url_download" in p.name
+            or "_ytdlp_" in p.name
+        ):
+            try:
+                p.unlink()
+                removed += 1
+            except Exception:
+                pass
+    if removed > 0:
+        logger.info("Cleaned up %d orphaned temporary file(s) in %s", removed, target_dir)
+    return removed
+
+
+def _sanitize_upload_filename(raw_name: str | None, default_base: str = "upload.wav") -> tuple[str, str]:
+    """Return (sanitized_display_filename, sanitized_extension) for an uploaded file."""
+    clean_name = sanitize_filename(raw_name or default_base, default=default_base)
+    raw_ext = Path(clean_name).suffix.lower()
+    safe_ext = re.sub(r"[^a-z0-9.]", "", raw_ext)[:10] if raw_ext else ".wav"
+    if not safe_ext.startswith("."):
+        safe_ext = ".wav"
+    return clean_name, safe_ext
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    _cleanup_orphaned_uploads()
     if settings.model_idle_timeout_seconds > 0:
         model_eviction_monitor.start(timeout_seconds=settings.model_idle_timeout_seconds)
     yield
@@ -119,6 +156,51 @@ class RenameSpeakerRequest(BaseModel):
     new_name: str
 
 
+class URLJobRequest(BaseModel):
+    url: str
+    whisper_engine: str = "faster-whisper"
+    whisper_model: str = "base"
+    language: str = "auto"
+    vad_filter: bool = True
+    enable_diarization: bool = True
+    num_speakers: int = -1
+    cluster_threshold: float = 0.5
+    ai_action: str = "summary"
+    summary_level: str = "bullets"
+    llm_provider: str = "ollama"
+    llm_model: str | None = None
+    notify: bool = False
+    clean_audio: bool = False
+
+
+class BatchURLJobRequest(BaseModel):
+    urls: list[str]
+    whisper_engine: str = "faster-whisper"
+    whisper_model: str = "base"
+    language: str = "auto"
+    vad_filter: bool = True
+    enable_diarization: bool = True
+    num_speakers: int = -1
+    cluster_threshold: float = 0.5
+    ai_action: str = "summary"
+    summary_level: str = "bullets"
+    llm_provider: str = "ollama"
+    llm_model: str | None = None
+    notify: bool = False
+    clean_audio: bool = False
+
+
+class TranscribeURLRequest(BaseModel):
+    url: str
+    whisper_engine: str = "faster-whisper"
+    whisper_model: str = "base"
+    language: str = "auto"
+    vad_filter: bool = True
+    enable_diarization: bool = False
+    num_speakers: int = -1
+    clean_audio: bool = False
+
+
 # ------------------------------------------------------------------------------
 # UI Routes
 # ------------------------------------------------------------------------------
@@ -141,12 +223,18 @@ async def index(request: Request):
 async def get_system_status():
     ollama_prov = llm_registry.get_provider("ollama")
     ollama_status = await ollama_prov.test_connection()
+    ingestor = MediaURLIngestor()
 
     return {
         "status": "healthy",
         "ffmpeg": {
             "available": bool(settings.ffmpeg_bin),
             "binary_path": settings.ffmpeg_bin,
+        },
+        "url_ingestion": {
+            "available": True,
+            "ytdlp_available": ingestor.is_ytdlp_available(),
+            "max_download_size_mb": settings.url_max_download_size_mb,
         },
         "whisper_engines": transcriber_factory.list_engines(),
         "diarization_engines": diarizer_factory.list_engines(),
@@ -266,7 +354,7 @@ async def test_provider_settings_endpoint(req: SettingsTestRequest):
         extra_headers = {}
         if prov_id == "openrouter":
             extra_headers = {
-                "HTTP-Referer": "https://github.com/jeckyllX/transcriber",
+                "HTTP-Referer": "http://localhost:8000",
                 "X-Title": "Transcriber",
             }
 
@@ -297,7 +385,8 @@ async def test_provider_settings_endpoint(req: SettingsTestRequest):
 # ------------------------------------------------------------------------------
 @app.post("/api/jobs")
 async def create_background_job(
-    file: UploadFile = File(...),
+    file: UploadFile | None = File(default=None),
+    url: str | None = Form(default=None),
     whisper_engine: str = Form(default="faster-whisper"),
     whisper_model: str = Form(default="base"),
     language: str = Form(default="auto"),
@@ -312,21 +401,60 @@ async def create_background_job(
     notify: bool = Form(default=False),
     clean_audio: bool = Form(default=False),
 ):
-    """Submit an audio file for asynchronous processing.
+    """Submit an audio file or media URL for asynchronous processing.
 
     Returns immediately with job_id so clients can track real-time progress.
     """
-    job = job_manager.create_job(file.filename)
-    ext = Path(file.filename).suffix or ".wav"
-    temp_upload = UPLOADS_DIR / f"{job.job_id}_upload{ext}"
+    if file is None and (not url or not url.strip()):
+        raise HTTPException(
+            status_code=400,
+            detail="Either an audio/video file or a media URL must be provided.",
+        )
 
-    with open(temp_upload, "wb") as f:
-        shutil.copyfileobj(file.file, f)
+    if file is not None:
+        safe_name, ext = _sanitize_upload_filename(file.filename)
+        job = job_manager.create_job(safe_name)
+        temp_upload = UPLOADS_DIR / f"{job.job_id}_upload{ext}"
+        try:
+            with open(temp_upload, "wb") as f:
+                shutil.copyfileobj(file.file, f)
+        except Exception as exc:
+            temp_upload.unlink(missing_ok=True)
+            job_manager.delete_job(job.job_id)
+            raise HTTPException(status_code=500, detail=f"Failed to save uploaded file: {exc}") from exc
 
-    # Launch background task
+        job_manager.start_job_pipeline(
+            job_id=job.job_id,
+            media_path=temp_upload,
+            whisper_engine=whisper_engine,
+            whisper_model=whisper_model,
+            language=language,
+            vad_filter=vad_filter,
+            enable_diarization=enable_diarization,
+            num_speakers=num_speakers,
+            cluster_threshold=cluster_threshold,
+            ai_action=ai_action,
+            summary_level=summary_level,
+            llm_provider=llm_provider,
+            llm_model=llm_model,
+            notify=notify,
+            clean_audio=clean_audio,
+        )
+        return {"job_id": job.job_id, "status": "queued"}
+
+    # URL submission path
+    ingestor = MediaURLIngestor()
+    try:
+        clean_url = ingestor.validate_media_url(url or "")
+    except URLIngestionError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    initial_name = ingestor.derive_initial_display_name(clean_url)
+    job = job_manager.create_job(initial_name, source_url=clean_url)
+
     job_manager.start_job_pipeline(
         job_id=job.job_id,
-        media_path=temp_upload,
+        source_url=clean_url,
         whisper_engine=whisper_engine,
         whisper_model=whisper_model,
         language=language,
@@ -342,7 +470,86 @@ async def create_background_job(
         clean_audio=clean_audio,
     )
 
-    return {"job_id": job.job_id, "status": "queued"}
+    return {"job_id": job.job_id, "status": "queued", "source_url": clean_url}
+
+
+@app.post("/api/jobs/url")
+async def create_url_background_job(req: URLJobRequest):
+    """Submit a media URL for asynchronous background download, transcription, and AI processing."""
+    ingestor = MediaURLIngestor()
+    try:
+        clean_url = ingestor.validate_media_url(req.url)
+    except URLIngestionError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    initial_name = ingestor.derive_initial_display_name(clean_url)
+    job = job_manager.create_job(initial_name, source_url=clean_url)
+
+    job_manager.start_job_pipeline(
+        job_id=job.job_id,
+        source_url=clean_url,
+        whisper_engine=req.whisper_engine,
+        whisper_model=req.whisper_model,
+        language=req.language,
+        vad_filter=req.vad_filter,
+        enable_diarization=req.enable_diarization,
+        num_speakers=req.num_speakers,
+        cluster_threshold=req.cluster_threshold,
+        ai_action=req.ai_action,
+        summary_level=req.summary_level,
+        llm_provider=req.llm_provider,
+        llm_model=req.llm_model,
+        notify=req.notify,
+        clean_audio=req.clean_audio,
+    )
+
+    return {"job_id": job.job_id, "status": "queued", "filename": initial_name, "source_url": clean_url}
+
+
+@app.post("/api/jobs/batch-urls")
+async def create_batch_url_jobs(req: BatchURLJobRequest):
+    """Submit multiple media URLs for concurrency-controlled batch processing."""
+    raw_urls = [u.strip() for u in req.urls if u and u.strip()]
+    if not raw_urls:
+        raise HTTPException(status_code=400, detail="No valid URLs provided for batch processing.")
+
+    ingestor = MediaURLIngestor()
+    validated_urls: list[str] = []
+    display_names: list[str] = []
+    for raw_url in raw_urls:
+        try:
+            clean_url = ingestor.validate_media_url(raw_url)
+        except URLIngestionError as exc:
+            raise HTTPException(status_code=400, detail=f"Invalid URL '{raw_url}': {exc}") from exc
+        validated_urls.append(clean_url)
+        display_names.append(ingestor.derive_initial_display_name(clean_url))
+
+    batch, created_jobs = job_manager.create_batch(
+        filenames=display_names,
+        source_urls=validated_urls,
+    )
+
+    for clean_url, job in zip(validated_urls, created_jobs):
+        job_manager.start_job_pipeline(
+            job_id=job.job_id,
+            source_url=clean_url,
+            whisper_engine=req.whisper_engine,
+            whisper_model=req.whisper_model,
+            language=req.language,
+            vad_filter=req.vad_filter,
+            enable_diarization=req.enable_diarization,
+            num_speakers=req.num_speakers,
+            cluster_threshold=req.cluster_threshold,
+            ai_action=req.ai_action,
+            summary_level=req.summary_level,
+            llm_provider=req.llm_provider,
+            llm_model=req.llm_model,
+            notify=req.notify,
+            clean_audio=req.clean_audio,
+        )
+
+    summary = job_manager.get_batch_summary(batch.batch_id)
+    return {"batch_id": batch.batch_id, "status": "queued", "summary": summary}
 
 
 @app.post("/api/jobs/{job_id}/rename-speaker")
@@ -364,6 +571,7 @@ async def get_job_details(job_id: str):
     return {
         "job_id": job.job_id,
         "filename": job.filename,
+        "source_url": job.source_url,
         "status": job.status,
         "progress": job.progress,
         "message": job.message,
@@ -384,14 +592,18 @@ async def stream_job_events(job_id: str):
     queue = job_manager.subscribe(job_id)
 
     async def sse_generator():
-        # Emit initial current status
-        yield f"event: status\ndata: {json.dumps({'status': job.status, 'progress': job.progress, 'message': job.message})}\n\n"
-
-        if job.result:
-            yield f"event: completed\ndata: {json.dumps(job.result)}\n\n"
-            return
-
         try:
+            # Emit initial current status
+            yield f"event: status\ndata: {json.dumps({'status': job.status, 'progress': job.progress, 'message': job.message})}\n\n"
+
+            if job.result:
+                yield f"event: completed\ndata: {json.dumps(job.result)}\n\n"
+                return
+
+            if job.status == "failed":
+                yield f"event: failed\ndata: {json.dumps({'error': job.error or job.message or 'Job failed'})}\n\n"
+                return
+
             while True:
                 msg = await queue.get()
                 event_name = msg.get("event", "message")
@@ -433,14 +645,19 @@ async def create_batch_jobs(
     if not files:
         raise HTTPException(status_code=400, detail="No files provided for batch processing.")
 
-    filenames = [f.filename for f in files]
+    sanitized_pairs = [_sanitize_upload_filename(f.filename) for f in files]
+    filenames = [pair[0] for pair in sanitized_pairs]
     batch, created_jobs = job_manager.create_batch(filenames)
 
-    for file_obj, job in zip(files, created_jobs):
-        ext = Path(file_obj.filename).suffix or ".wav"
+    for file_obj, (_, ext), job in zip(files, sanitized_pairs, created_jobs):
         temp_upload = UPLOADS_DIR / f"{job.job_id}_upload{ext}"
-        with open(temp_upload, "wb") as f_out:
-            shutil.copyfileobj(file_obj.file, f_out)
+        try:
+            with open(temp_upload, "wb") as f_out:
+                shutil.copyfileobj(file_obj.file, f_out)
+        except Exception as exc:
+            temp_upload.unlink(missing_ok=True)
+            job_manager.update_status(job.job_id, "failed", 0, f"Upload failed: {exc}")
+            continue
 
         # Enqueue background pipeline task (guarded by job_manager.semaphore)
         job_manager.start_job_pipeline(
@@ -490,13 +707,14 @@ async def stream_batch_events(batch_id: str):
     queue = job_manager.subscribe_batch(batch_id)
 
     async def sse_generator():
-        # Emit initial current batch snapshot
-        yield f"event: batch_status\ndata: {json.dumps(summary)}\n\n"
-
-        if summary["status"] in ("completed", "failed", "partial_failure"):
-            return
-
         try:
+            # Emit initial current batch snapshot
+            yield f"event: batch_status\ndata: {json.dumps(summary)}\n\n"
+
+            if summary["status"] in ("completed", "failed", "partial_failure"):
+                yield f"event: batch_completed\ndata: {json.dumps(summary)}\n\n"
+                return
+
             while True:
                 msg = await queue.get()
                 event_name = msg.get("event", "message")
@@ -714,7 +932,7 @@ async def transcribe_audio(
 ):
     """Upload audio/video file, decode via in-memory PCM or WAV, and transcribe."""
     task_id = str(uuid.uuid4())[:8]
-    ext = Path(file.filename).suffix or ".wav"
+    safe_name, ext = _sanitize_upload_filename(file.filename)
     temp_upload = UPLOADS_DIR / f"{task_id}_raw{ext}"
 
     start_time = time.time()
@@ -747,7 +965,7 @@ async def transcribe_audio(
 
         return {
             "task_id": task_id,
-            "filename": file.filename,
+            "filename": safe_name,
             "duration": duration,
             "processing_time": elapsed,
             "engine_used": engine_name,
@@ -772,6 +990,84 @@ async def transcribe_audio(
         if temp_upload.exists():
             try:
                 temp_upload.unlink()
+            except Exception:
+                pass
+
+
+@app.post("/api/transcribe-url")
+async def transcribe_url_endpoint(req: TranscribeURLRequest):
+    """Download media from a URL and synchronously transcribe it."""
+    task_id = str(uuid.uuid4())[:8]
+    ingestor = MediaURLIngestor()
+    try:
+        clean_url = ingestor.validate_media_url(req.url)
+    except URLIngestionError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    start_time = time.time()
+    downloaded_path: Path | None = None
+    try:
+        loop = asyncio.get_running_loop()
+        downloaded = await loop.run_in_executor(
+            None,
+            lambda: ingestor.download_media(
+                url=clean_url,
+                dest_dir=UPLOADS_DIR,
+                job_id=task_id,
+            ),
+        )
+        downloaded_path = downloaded.file_path
+
+        (
+            result,
+            num_speakers_detected,
+            duration,
+            engine_name,
+        ) = await loop.run_in_executor(
+            None,
+            lambda: job_manager.transcribe_and_diarize(
+                media_path=downloaded_path,
+                whisper_engine=req.whisper_engine,
+                whisper_model=req.whisper_model,
+                language=req.language,
+                vad_filter=req.vad_filter,
+                enable_diarization=req.enable_diarization,
+                num_speakers=req.num_speakers,
+                clean_audio=req.clean_audio,
+                job_id=task_id,
+            ),
+        )
+
+        elapsed = round(time.time() - start_time, 2)
+
+        return {
+            "task_id": task_id,
+            "filename": downloaded.display_name,
+            "source_url": clean_url,
+            "duration": duration,
+            "processing_time": elapsed,
+            "engine_used": engine_name,
+            "model_used": req.whisper_model,
+            "audio_enhanced": req.clean_audio,
+            "language": result.language,
+            "num_speakers": num_speakers_detected,
+            "speaker_turns": result.get_speaker_turns(),
+            "text": result.to_txt(),
+            "srt": result.to_srt(),
+            "vtt": result.to_vtt(),
+            "ass": result.to_ass(),
+            "word_vtt": result.to_word_vtt(),
+            "segments": [s.model_dump() for s in result.segments],
+        }
+    except URLIngestionError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        logger.exception("URL transcription failed for task %s", task_id)
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    finally:
+        if downloaded_path and downloaded_path.exists():
+            try:
+                downloaded_path.unlink()
             except Exception:
                 pass
 

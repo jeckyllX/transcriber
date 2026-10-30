@@ -14,7 +14,10 @@
     "model_idle_timeout_seconds": 1800
   },
   "audio": {
-    "enhancement_filter": "highpass=f=80,afftdn=nf=-25,loudnorm=I=-16:TP=-1.5:LRA=11"
+    "enhancement_filter": "highpass=f=80,afftdn=nf=-25,loudnorm=I=-16:TP=-1.5:LRA=11",
+    "url_max_download_size_mb": 500,
+    "url_download_timeout_seconds": 600,
+    "url_allow_local_network": false
   },
   "diarization": {
     "enabled": true,

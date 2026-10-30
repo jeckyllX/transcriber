@@ -32,7 +32,7 @@ class Job:
     """Represents a background audio processing task."""
     job_id: str
     filename: str
-    status: str = "queued"  # queued, converting, transcribing, processing_ai, completed, failed
+    status: str = "queued"  # queued, downloading, converting, transcribing, processing_ai, completed, failed
     progress: int = 0
     message: str = "Job queued"
     duration: float = 0.0
@@ -42,6 +42,7 @@ class Job:
     created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     event_queues: list[asyncio.Queue[dict[str, Any]]] = field(default_factory=list)
     batch_id: str | None = None
+    source_url: str | None = None
 
 
 @dataclass
@@ -60,6 +61,7 @@ class JobManager:
         self._jobs: dict[str, Job] = {}
         self._batches: dict[str, BatchJob] = {}
         self._semaphore: asyncio.Semaphore | None = None
+        self._semaphore_loop: asyncio.AbstractEventLoop | None = None
         self._store = store
         self._active_tasks: set[asyncio.Task[Any]] = set()
 
@@ -91,14 +93,29 @@ class JobManager:
 
     @property
     def semaphore(self) -> asyncio.Semaphore:
-        if self._semaphore is None:
+        try:
+            current_loop = asyncio.get_running_loop()
+        except RuntimeError:
+            current_loop = None
+        if self._semaphore is None or (current_loop is not None and self._semaphore_loop is not current_loop):
             from config import settings
             self._semaphore = asyncio.Semaphore(settings.max_concurrent_jobs)
+            self._semaphore_loop = current_loop
         return self._semaphore
 
-    def create_job(self, filename: str, batch_id: str | None = None) -> Job:
+    def create_job(
+        self,
+        filename: str,
+        batch_id: str | None = None,
+        source_url: str | None = None,
+    ) -> Job:
         job_id = str(uuid.uuid4())[:8]
-        job = Job(job_id=job_id, filename=filename, batch_id=batch_id)
+        job = Job(
+            job_id=job_id,
+            filename=filename,
+            batch_id=batch_id,
+            source_url=source_url,
+        )
         self._jobs[job_id] = job
         if self.store:
             try:
@@ -118,12 +135,17 @@ class JobManager:
                 logger.warning("Failed to load job %s from storage: %s", job_id, e)
         return job
 
-    def create_batch(self, filenames: list[str]) -> tuple[BatchJob, list[Job]]:
+    def create_batch(
+        self,
+        filenames: list[str],
+        source_urls: list[str | None] | None = None,
+    ) -> tuple[BatchJob, list[Job]]:
         batch_id = str(uuid.uuid4())[:8]
         batch = BatchJob(batch_id=batch_id)
         created_jobs = []
-        for filename in filenames:
-            job = self.create_job(filename, batch_id=batch_id)
+        for idx, filename in enumerate(filenames):
+            src_url = source_urls[idx] if source_urls and idx < len(source_urls) else None
+            job = self.create_job(filename, batch_id=batch_id, source_url=src_url)
             batch.job_ids.append(job.job_id)
             created_jobs.append(job)
         self._batches[batch_id] = batch
@@ -141,7 +163,12 @@ class JobManager:
                 stored = self.store.get_batch(batch_id)
                 if stored:
                     job_ids = [j["job_id"] for j in stored.get("jobs", [])]
-                    batch = BatchJob(batch_id=batch_id, job_ids=job_ids)
+                    created_dt = (
+                        datetime.fromisoformat(stored["created_at"])
+                        if stored.get("created_at")
+                        else datetime.now(timezone.utc)
+                    )
+                    batch = BatchJob(batch_id=batch_id, job_ids=job_ids, created_at=created_dt)
                     self._batches[batch_id] = batch
             except Exception as e:
                 logger.warning("Failed to load batch %s from storage: %s", batch_id, e)
@@ -540,7 +567,7 @@ class JobManager:
     async def run_pipeline(
         self,
         job_id: str,
-        media_path: Path,
+        media_path: Path | None = None,
         whisper_engine: str = "faster-whisper",
         whisper_model: str = "base",
         language: str | None = None,
@@ -554,15 +581,68 @@ class JobManager:
         llm_model: str | None = None,
         notify: bool = False,
         clean_audio: bool = False,
+        source_url: str | None = None,
     ) -> None:
         job = self.get_job(job_id)
         if not job:
             return
 
+        effective_url = source_url or job.source_url
         start_time = time.time()
 
         try:
             async with self.semaphore:
+                loop = asyncio.get_running_loop()
+
+                # 0. Optional URL ingestion
+                if media_path is None and effective_url:
+                    from config import UPLOADS_DIR
+                    from url_ingestor import MediaURLIngestor
+
+                    self.update_status(
+                        job_id,
+                        "downloading",
+                        8,
+                        f"Downloading media from URL ({job.filename})...",
+                    )
+                    ingestor = MediaURLIngestor()
+                    last_emit_pct = -1
+
+                    def _on_download_progress(
+                        downloaded_bytes: int,
+                        total_bytes: int | None,
+                        display_name: str,
+                    ) -> None:
+                        nonlocal last_emit_pct
+                        if total_bytes and total_bytes > 0:
+                            pct = min(100, int((downloaded_bytes * 100) / total_bytes))
+                            if pct - last_emit_pct >= 20:
+                                last_emit_pct = pct
+                                mapped = 8 + int((pct / 100.0) * 6)
+                                mb_done = downloaded_bytes / (1024 * 1024)
+                                mb_tot = total_bytes / (1024 * 1024)
+                                self.update_status(
+                                    job_id,
+                                    "downloading",
+                                    mapped,
+                                    f"Downloading {display_name} ({mb_done:.1f} / {mb_tot:.1f} MB)...",
+                                )
+
+                    downloaded = await loop.run_in_executor(
+                        None,
+                        lambda: ingestor.download_media(
+                            url=effective_url,
+                            dest_dir=UPLOADS_DIR,
+                            job_id=job_id,
+                            progress_callback=_on_download_progress,
+                        ),
+                    )
+                    media_path = downloaded.file_path
+                    job.filename = downloaded.display_name
+
+                if media_path is None:
+                    raise RuntimeError("No input media file or source URL provided for job.")
+
                 # 1. Convert audio
                 if clean_audio:
                     self.update_status(
@@ -581,7 +661,6 @@ class JobManager:
                     self.emit(job_id, "segment", seg.model_dump())
 
                 # Run CPU-bound transcription in threadpool to avoid blocking event loop
-                loop = asyncio.get_running_loop()
                 (
                     transcription_result,
                     num_speakers_detected,
@@ -614,6 +693,7 @@ class JobManager:
             job_result: dict[str, Any] = {
                 "task_id": job_id,
                 "filename": job.filename,
+                "source_url": effective_url,
                 "duration": job.duration or transcription_result.duration,
                 "language": transcription_result.language,
                 "engine_used": engine_name,
@@ -707,7 +787,7 @@ class JobManager:
         finally:
             self._prune_completed_cache()
             # Clean up source file
-            if media_path.exists():
+            if media_path is not None and media_path.exists():
                 try:
                     media_path.unlink()
                 except Exception:

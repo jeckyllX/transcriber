@@ -21,7 +21,15 @@ class OllamaLLMProvider(BaseLLMProvider):
     display_name: str = "Ollama (Local / Self-Hosted)"
 
     def __init__(self, base_url: str | None = None):
-        self.base_url = (base_url or settings.ollama_base_url).rstrip("/")
+        self._custom_base_url = base_url.rstrip("/") if base_url else None
+
+    @property
+    def base_url(self) -> str:
+        return (self._custom_base_url or settings.ollama_base_url or "http://127.0.0.1:11434").rstrip("/")
+
+    @base_url.setter
+    def base_url(self, value: str | None) -> None:
+        self._custom_base_url = value.rstrip("/") if value else None
 
     def is_configured(self) -> bool:
         return bool(self.base_url)

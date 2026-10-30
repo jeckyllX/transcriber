@@ -45,7 +45,7 @@ class TranscriberFactory:
                     "openai/whisper-1",
                 ],
                 extra_headers={
-                    "HTTP-Referer": "https://github.com/jeckyllX/transcriber",
+                    "HTTP-Referer": "http://localhost:8000",
                     "X-Title": "Transcriber",
                 },
             ),

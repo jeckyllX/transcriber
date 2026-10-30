@@ -26,7 +26,18 @@ def isolate_test_job_store(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         test_config.write_text(config.CONFIG_JSON_PATH.read_text(encoding="utf-8"), encoding="utf-8")
     monkeypatch.setattr(config, "CONFIG_JSON_PATH", test_config)
 
+    test_uploads = tmp_path / "uploads"
+    test_uploads.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr(config, "UPLOADS_DIR", test_uploads)
+    try:
+        import main
+        monkeypatch.setattr(main, "UPLOADS_DIR", test_uploads)
+    except Exception:
+        pass
+
     jobs.job_manager._jobs.clear()
     jobs.job_manager._batches.clear()
+    jobs.job_manager._semaphore = None
+    jobs.job_manager._semaphore_loop = None
 
     yield test_store

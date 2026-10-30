@@ -58,16 +58,19 @@
       <div class="lg:col-span-6 space-y-6">
         <div class="bg-slate-900/50 border border-slate-800 rounded-2xl p-6 backdrop-blur-sm shadow-xl">
           <h2 class="text-base font-semibold text-slate-200 mb-4 flex items-center gap-2">
-            <i data-lucide="upload-cloud" class="w-5 h-5 text-indigo-400"></i> 1. Select Audio or Record
+            <i data-lucide="upload-cloud" class="w-5 h-5 text-indigo-400"></i> 1. Select Audio, Record, or URL
           </h2>
 
-          <!-- Tabs for Upload vs Record -->
+          <!-- Tabs for Upload vs Record vs URL -->
           <div class="flex border-b border-slate-800 mb-4">
             <button id="tab-upload-btn" class="flex-1 pb-3 text-sm font-medium border-b-2 border-indigo-500 text-indigo-400 flex items-center justify-center gap-2">
               <i data-lucide="file-audio" class="w-4 h-4"></i> File Upload
             </button>
             <button id="tab-record-btn" class="flex-1 pb-3 text-sm font-medium border-b-2 border-transparent text-slate-400 hover:text-slate-300 flex items-center justify-center gap-2">
               <i data-lucide="mic" class="w-4 h-4"></i> Live Microphone
+            </button>
+            <button id="tab-url-btn" class="flex-1 pb-3 text-sm font-medium border-b-2 border-transparent text-slate-400 hover:text-slate-300 flex items-center justify-center gap-2">
+              <i data-lucide="link" class="w-4 h-4"></i> From URL
             </button>
           </div>
 
@@ -161,6 +164,40 @@
 
             <!-- Audio preview player -->
             <audio id="record-preview" controls class="hidden w-full mt-4"></audio>
+          </div>
+
+          <!-- Media URL Ingestion Panel -->
+          <div id="url-panel" class="hidden space-y-4 py-2">
+            <div class="p-4 rounded-xl bg-slate-950/60 border border-slate-800 space-y-3">
+              <div class="flex items-center justify-between">
+                <label for="media-url-input" class="text-xs font-medium text-slate-300 flex items-center gap-1.5">
+                  <i data-lucide="globe" class="w-3.5 h-3.5 text-indigo-400"></i>
+                  <span>Direct Audio / Video URL (or one URL per line for batch)</span>
+                </label>
+                <span id="url-extractor-badge" class="text-[10px] px-2 py-0.5 rounded-full bg-indigo-500/10 text-indigo-400 border border-indigo-500/20 font-medium">Direct Stream</span>
+              </div>
+
+              <div class="relative">
+                <textarea
+                  id="media-url-input"
+                  rows="3"
+                  inputmode="url"
+                  autocorrect="off"
+                  autocapitalize="none"
+                  spellcheck="false"
+                  placeholder="https://example.com/podcast/episode.mp3&#10;(Paste one or multiple http/https media URLs, one per line)"
+                  class="w-full bg-slate-900 border border-slate-700/80 rounded-xl px-3.5 py-2.5 pr-9 text-xs text-slate-200 placeholder-slate-500 focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 font-mono leading-relaxed resize-y custom-scrollbar"
+                ></textarea>
+                <button type="button" id="clear-url-btn" title="Clear URL input" class="hidden absolute right-2.5 top-2.5 text-slate-400 hover:text-red-400 p-1 rounded-lg hover:bg-slate-800 transition-colors">
+                  <i data-lucide="x" class="w-3.5 h-3.5"></i>
+                </button>
+              </div>
+
+              <div class="flex items-center justify-between text-[11px] text-slate-400 pt-1">
+                <span>Supports <code class="text-slate-300">.mp3</code>, <code class="text-slate-300">.wav</code>, <code class="text-slate-300">.m4a</code>, <code class="text-slate-300">.mp4</code>, <code class="text-slate-300">.ogg</code>, <code class="text-slate-300">.opus</code>, <code class="text-slate-300">.webm</code> &amp; <code class="text-slate-300">yt-dlp</code> links</span>
+                <span id="url-count-badge" class="hidden font-mono text-indigo-400 font-medium">1 URL ready</span>
+              </div>
+            </div>
           </div>
 
           <!-- Audio playback preview -->
